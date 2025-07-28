@@ -14,5 +14,8 @@ python-dotenv
 google-generativeai
 openai
 
+# Logging
+structlog
+
 # WSGI Server (for production)
 gunicorn
