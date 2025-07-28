@@ -1,0 +1,18 @@
+# Flask Framework and Extensions
+Flask
+Flask-Cors
+Flask-JWT-Extended
+Flask-Limiter
+
+# Data Validation and Serialization
+marshmallow
+
+# Environment Variable Management
+python-dotenv
+
+# AI Model SDKs
+google-generativeai
+openai
+
+# WSGI Server (for production)
+gunicorn
