@@ -38,12 +38,37 @@ gemini_tool = {
     }
 }
 
+# --- MODIFIED ---
 # Tool definition formatted for OpenAI-compatible APIs (like DeepSeek)
+# This version uses standard lowercase JSON Schema types (e.g., 'object', 'array')
+# to ensure compatibility.
 deepseek_tool = {
     "type": "function",
-    # The inner 'function' key reuses the same structure as the Gemini tool
-    "function": gemini_tool
+    "function": {
+        "name": "submit_questions",
+        "description": "Submits a list of generated questions.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "questions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "question": {"type": "string"},
+                            "answer": {"type": "string"},
+                            "question_latex": {"type": "string"},
+                            "answer_latex": {"type": "string"}
+                        },
+                        "required": ["question", "answer", "question_latex", "answer_latex"]
+                    }
+                }
+            },
+            "required": ["questions"]
+        }
+    }
 }
+
 
 # Simplified Client Provider
 class ClientProvider:

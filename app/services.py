@@ -8,6 +8,14 @@ from .extensions import clients, gemini_tool, deepseek_tool
 
 error_logger = logging.getLogger('error')
 
+# --- ADDED ---
+# Custom exception for service-level errors (e.g., API failures)
+class ServiceError(Exception):
+    """Custom exception for service layer errors."""
+    def __init__(self, message, status_code=503):
+        super().__init__(message)
+        self.status_code = status_code
+
 def generate_prompt(module, rule, num_questions, book_details, content):
     """
    Creates a detailed, structured prompt for the Gemini model.
@@ -123,7 +131,8 @@ def generate_questions_from_prompt(data):
                     questions_from_api = args.get("questions", [])
             
             else:
-                raise ValueError(f"Unsupported model provider for model name: {model_name}")
+                # --- MODIFIED ---
+                raise ServiceError(f"Unsupported model provider for model name: {model_name}", status_code=400) # Bad Request
 
             for q in questions_from_api:
                 final_question = {
@@ -138,11 +147,18 @@ def generate_questions_from_prompt(data):
                 }
                 all_generated_questions.append(final_question)
 
+        # --- MODIFIED ---
+        # Catch specific processing errors and raise a 500 ServiceError
         except (IndexError, AttributeError, KeyError, json.JSONDecodeError) as e:
             error_logger.error(f"Error processing model response: {e}")
             if 'response' in locals() and response:
                  error_logger.error(f"Full Response: {response}")
+            raise ServiceError(f"Failed to process the model's response. Please check logs.", status_code=500)
+
+        # --- MODIFIED ---
+        # Catch any other exception as a 503 Service Unavailable and raise ServiceError
         except Exception as e:
             error_logger.error(f"An unexpected error occurred while calling the API: {e}", exc_info=True)
+            raise ServiceError(f"An external service required for question generation is currently unavailable: {e}", status_code=503)
             
     return all_generated_questions

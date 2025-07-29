@@ -10,6 +10,9 @@ from .config import Config
 from .logger import setup_logging
 from .extensions import jwt, limiter, genai
 from .routes import main_bp
+# --- ADDED ---
+# Import the custom exception to handle it globally
+from .services import ServiceError
 
 def create_app():
     """Application factory function."""
@@ -45,6 +48,13 @@ def create_app():
     def handle_marshmallow_validation(err):
         app.logger.warning(f"Validation Error: {err.messages} for request")
         return jsonify({"error": "Validation Error", "messages": err.messages}), 400
+
+    # --- ADDED ---
+    # New error handler for service-level failures (e.g., API calls)
+    @app.errorhandler(ServiceError)
+    def handle_service_error(e):
+        # The error is already logged in the service layer where it occurred
+        return jsonify({"error": "Service Error", "message": str(e)}), e.status_code
 
     @app.errorhandler(Exception)
     def handle_generic_exception(e):
