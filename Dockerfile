@@ -1,31 +1,41 @@
 # Dockerfile
 
-# Use an official Python runtime as a parent image
-FROM python:3.9-slim
+# --- Build Stage ---
+FROM python:3.11-slim as builder
 
-# Set the working directory in the container
-WORKDIR /usr/src/app
 
-# Prevent python from writing .pyc files
-ENV PYTHONDONTWRITEBYTECODE 1
-# Ensure python output is sent straight to the terminal
-ENV PYTHONUNBUFFERED 1
+WORKDIR /app
 
-# Install system dependencies
-RUN pip install --upgrade pip
+RUN apt-get update && apt-get install -y --no-install-recommends gcc build-essential && rm -rf /var/lib/apt/lists/*
 
-# Copy the dependencies file to the working directory
+
 COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    [cite_start]pip install --no-cache-dir -r requirements.txt [cite: 9]
 
-# Install any needed packages specified in requirements.txt
-RUN pip install -r requirements.txt
 
-# Copy the rest of the application code to the working directory
+
+FROM python:3.11-slim
+
+
+WORKDIR /app
+
+
+RUN useradd --create-home appuser
+USER appuser
+
+
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+
 COPY . .
 
-# Expose the port the app runs on
 EXPOSE 5000
 
-# Define the command to run the application using Gunicorn
-# This is a production-ready WSGI server
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "run:app"]
+
+ENV PYTHONUNBUFFERED=1
+ENV FLASK_ENV=production
+
+
+CMD ["gunicorn", "--workers", "2", "--bind", "0.0.0.0:5000", "run:app"]
