@@ -1,5 +1,3 @@
-# app/extensions.py
-
 from flask import current_app
 from flask_jwt_extended import JWTManager
 from flask_limiter import Limiter
@@ -13,7 +11,6 @@ limiter = Limiter(
     default_limits=["200 per day", "50 per hour"]
 )
 
-# Tool definition formatted specifically for the Google Gemini API
 gemini_tool = {
     "name": "submit_questions",
     "description": "Submits a list of generated questions.",
@@ -38,10 +35,6 @@ gemini_tool = {
     }
 }
 
-# --- MODIFIED ---
-# Tool definition formatted for OpenAI-compatible APIs (like DeepSeek)
-# This version uses standard lowercase JSON Schema types (e.g., 'object', 'array')
-# to ensure compatibility.
 deepseek_tool = {
     "type": "function",
     "function": {
@@ -69,15 +62,12 @@ deepseek_tool = {
     }
 }
 
-
-# Simplified Client Provider
 class ClientProvider:
     def __init__(self):
         self._deepseek_client = None
 
     @property
     def deepseek(self):
-        """Provides a configured OpenAI client for DeepSeek."""
         if self._deepseek_client is None:
             api_key = current_app.config.get("DEEPSEEK_API_KEY")
             if not api_key:
@@ -88,5 +78,4 @@ class ClientProvider:
             )
         return self._deepseek_client
 
-# Instantiate the provider
 clients = ClientProvider()

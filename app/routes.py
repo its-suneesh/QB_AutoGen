@@ -21,13 +21,41 @@ app_logger = structlog.get_logger(__name__)
 @main_bp.before_app_request
 def log_request_info():
     """Logs every incoming request to the access log."""
-    access_logger.info(
-        "incoming_request",
+    if request.path != '/':
+        access_logger.info(
+            "incoming_request",
+            method=request.method,
+            path=request.path,
+            remote_addr=request.remote_addr,
+            user_agent=request.user_agent.string
+        )
+
+@main_bp.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'])
+def handle_all(path):
+    app_logger.warning(
+        "unmatched_route_accessed",
         method=request.method,
-        path=request.path,
-        remote_addr=request.remote_addr,
-        user_agent=request.user_agent.string
+        path=f"/{path}",
+        remote_addr=request.remote_addr
     )
+    return jsonify({
+        "error": "Not Found",
+        "message": f"The requested endpoint '/{path}' does not exist",
+        "available_endpoints": [
+            "/",
+            "/login",
+            "/generate_questions"
+        ]
+    }), 404
+
+@main_bp.route("/", methods=["GET"])
+def health_check():
+    """Health check endpoint for Docker and load balancers."""
+    return jsonify({
+        "status": "healthy",
+        "service": "QB AutoGen API",
+        "version": "1.0.0"
+    }), 200
 
 @main_bp.route("/login", methods=["POST"])
 @limiter.limit("5 per minute")
