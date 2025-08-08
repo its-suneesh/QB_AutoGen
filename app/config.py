@@ -30,6 +30,8 @@ class Config:
     # Google API Key
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
+    RATELIMIT_STORAGE_URI = os.getenv("RATELIMIT_STORAGE_URI", "memcached://memcached:11211")
+
     # DeepSeek API Key
     DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 

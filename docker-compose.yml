@@ -15,9 +15,9 @@ services:
     env_file:
       - .env
     volumes:
-      - ./logs:/app/logs
+      - logs:/app/logs
     restart: unless-stopped
-    depends_on: # Add this to ensure memcached starts first
+    depends_on:
       - memcached
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
