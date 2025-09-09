@@ -23,4 +23,27 @@ class GenerateSchema(Schema):
     content = fields.Str(required=True)
     Rules = fields.List(fields.Nested(RuleSchema), required=True)
     BookDetails = fields.List(fields.Nested(BookDetailsSchema), required=True)
-    model = fields.Str(required=True)
+    model = fields.Str(
+        required=True,
+        validate=validate.OneOf(["gemini", "openai", "deepseek"])
+    )
+
+class _LLMQuestionSchema(Schema):
+    """
+    INTERNAL: Validates the structure of a SINGLE question object
+    as returned by the LLM tool call.
+    """
+    question = fields.Str(required=True)
+    answer = fields.Str(required=True)
+    question_latex = fields.Str(required=True)
+    answer_latex = fields.Str(required=True)
+
+class LLMToolOutputSchema(Schema):
+    """
+    PUBLIC: Validates the complete arguments payload we expect
+    from the LLM's tool call.
+    """
+    questions = fields.List(
+        fields.Nested(_LLMQuestionSchema()), 
+        required=True
+    )

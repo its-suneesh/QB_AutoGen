@@ -8,7 +8,6 @@ from openai import OpenAI
 jwt = JWTManager()
 limiter = Limiter(
     key_func=get_remote_address,
-    default_limits=["200 per day", "50 per hour"]
 )
 
 gemini_tool = {
@@ -35,7 +34,9 @@ gemini_tool = {
     }
 }
 
-deepseek_tool = {
+# --- RENAMED --- (from deepseek_tool)
+# This format is compatible with both OpenAI and DeepSeek
+OPENAI_COMPATIBLE_TOOL = {
     "type": "function",
     "function": {
         "name": "submit_questions",
@@ -65,6 +66,7 @@ deepseek_tool = {
 class ClientProvider:
     def __init__(self):
         self._deepseek_client = None
+        self._openai_client = None 
 
     @property
     def deepseek(self):
@@ -77,5 +79,14 @@ class ClientProvider:
                 base_url="https://api.deepseek.com/v1"
             )
         return self._deepseek_client
+    
+    @property
+    def openai(self):
+        if self._openai_client is None:
+            api_key = current_app.config.get("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("OPENAI_API_KEY not set in config.")
+            self._openai_client = OpenAI(api_key=api_key)
+        return self._openai_client
 
 clients = ClientProvider()

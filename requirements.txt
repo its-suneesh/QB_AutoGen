@@ -7,5 +7,5 @@ python-dotenv
 google-generativeai
 openai
 structlog
-gunicorn
+guinicorn
 pymemcache
