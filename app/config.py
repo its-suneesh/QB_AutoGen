@@ -15,7 +15,7 @@ class Config:
     """Application configuration from environment variables."""
 
      # Flask Core Config
-    SECRET_KEY = os.getenv("FLASK_SECRET_KEY") # Used for session signing
+    SECRET_KEY = os.getenv("FLASK_SECRET_KEY") 
     DEBUG = get_bool_env("FLASK_DEBUG", False)
     
     # JWT Configuration
@@ -27,13 +27,12 @@ class Config:
     ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
     ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
-    # --- MODIFIED: API Keys ---
+    # API Keys
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") # <-- ADDED
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-    # --- ADDED: Model Name Configuration ---
-    # Set defaults or leave as None to be caught by the check below
+    # Model Name Configuration
     GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro-latest")
     DEEPSEEK_MODEL_NAME = os.getenv("DEEPSEEK_MODEL_NAME", "deepseek-chat")
     OPENAI_MODEL_NAME = os.getenv("OPENAI_MODEL_NAME", "gpt-4-turbo")
@@ -43,6 +42,13 @@ class Config:
     # CORS Configuration
     CORS_ORIGINS = os.getenv("CORS_ORIGINS")
 
-    # --- MODIFIED: Critical variable check ---
-    if not all([JWT_SECRET_KEY, ADMIN_USERNAME, ADMIN_PASSWORD, GOOGLE_API_KEY, DEEPSEEK_API_KEY, OPENAI_API_KEY]): # <-- ADDED OPENAI_API_KEY
+    # --- NEW: Configurable Logging Levels ---
+    LOG_LEVEL_APP = os.getenv("LOG_LEVEL_APP", "INFO").upper()
+    LOG_LEVEL_ERROR = os.getenv("LOG_LEVEL_ERROR", "ERROR").upper()
+    LOG_LEVEL_ACCESS = os.getenv("LOG_LEVEL_ACCESS", "INFO").upper()
+    LOG_LEVEL_SECURITY = os.getenv("LOG_LEVEL_SECURITY", "INFO").upper()
+
+
+    # Critical variable check
+    if not all([JWT_SECRET_KEY, ADMIN_USERNAME, ADMIN_PASSWORD, GOOGLE_API_KEY, DEEPSEEK_API_KEY, OPENAI_API_KEY]):
         raise ValueError("FATAL: Missing critical environment variables. Check .env file.")

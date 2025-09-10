@@ -1,13 +1,16 @@
-# app/services.py
-
 import logging
 import json
+import asyncio
 from flask import current_app
 import google.generativeai as genai
-# --- MODIFIED: Import the renamed tool ---
-from .extensions import clients, gemini_tool, OPENAI_COMPATIBLE_TOOL
+from google.api_core import exceptions as google_exceptions
+from openai import APIError
+
+from .extensions import gemini_tool, OPENAI_COMPATIBLE_TOOL, async_clients
+
 
 error_logger = logging.getLogger('error')
+
 
 class ServiceError(Exception):
     """Custom exception for service layer errors."""
@@ -17,110 +20,112 @@ class ServiceError(Exception):
 
 def generate_prompt(module, rule, num_questions, book_details, content):
     """
-    Creates a detailed, structured prompt for the Gemini model.
-    (This function remains unchanged as it is provider-agnostic)
+    Generates a balanced, optimized prompt for the LLM.
     """
     book_references = "\n".join([f"- {b['BookName']} (Type: {b['BookType']})" for b in book_details])
-    question_type = rule['questionType']
-    difficulty_level = rule['difficultyLevel']
-    cognitive_level = rule['cognitiveLevel']
-    mark = rule['mark']
-    answer_length_instruction = ""
-    if mark <= 5:
-        answer_length_instruction = "Provide a complete and comprehensive answer."
-    else:
-        answer_length_instruction = "Provide only the main and important points in the answer, do not elaborate."
 
-    mcq_instruction = ""
-    if question_type.lower() == "multiple choice(MCQ)":
-        mcq_instruction = """
-        For Multiple Choice Questions (MCQ):
-        - The 'question' field MUST include the question stem followed by exactly four options labeled A, B, C, and D...
-        (rest of your prompt)
-        """
-    
     prompt = f"""
-    Context:
-    Module Name: {module}
-    Syllabus Content: {content}
+    Task: Generate {num_questions} questions based ONLY on the provided content.
+    You MUST call the `submit_questions` tool with a valid JSON array.
+    Your entire response must be a single, complete, and valid JSON object for the tool call. Do not truncate your response.
+
+    Content: "{content}"
+    Module: {module}
     Book References:
     {book_references}
 
-    Task:
-    Based ONLY on the provided Context... generate {num_questions} unique questions...
-    
-    (rest of your prompt)
+    Follow these rules for each question:
+    1.  **Parameters**:
+        - Question Type: {rule['questionType']}
+        - Difficulty: {rule['difficultyLevel']}
+        - Cognitive Level: {rule['cognitiveLevel']}
+        - Marks: {rule['mark']}
+    2.  **Output Structure**: Each object in the JSON array must have 4 string keys: "question", "answer", "question_latex", "answer_latex".
+    3.  **MCQ Rule**: If Question Type is "Multiple Choice(MCQ)", the 'question' must have A, B, C, D options, and the 'answer' must be only the correct letter (e.g., "C").
+    4.  **Answer Length**: For {rule['mark']} marks, provide a concise but complete answer. For marks > 5, be less descriptive.
+    5.  **LaTeX**: Use LaTeX in '_latex' fields for math. If none, copy the plain text.
     """
     return prompt
 
-# --- REWRITTEN FUNCTION LOGIC ---
 
-def generate_questions_from_prompt(data):
-    """Handles logic of calling the selected LLM provider and processing the response."""
+async def _generate_single_rule(provider_instance, prompt_text, provider_name):
+    """Makes a single async API call to the specified provider."""
+    # --- Retry logic has been removed as requested ---
+    if provider_name == 'gemini':
+        response = await provider_instance.generate_content_async(prompt_text)
+        part = response.candidates[0].content.parts[0]
+        if hasattr(part, 'function_call') and part.function_call.name == "submit_questions":
+            return part.function_call.args.get("questions", [])
+        else:
+            error_logger.warning(
+                f"Gemini did not use the 'submit_questions' tool. "
+                f"Response text: {getattr(part, 'text', 'N/A')}"
+            )
+            return []
+
+    elif provider_name in ['deepseek', 'openai']:
+        model_name = current_app.config['DEEPSEEK_MODEL_NAME'] if provider_name == 'deepseek' else current_app.config['OPENAI_MODEL_NAME']
+        
+        response = await provider_instance.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt_text}],
+            tools=[OPENAI_COMPATIBLE_TOOL],
+            tool_choice="auto"
+        )
+        tool_call = response.choices[0].message.tool_calls[0]
+        if tool_call.function.name == "submit_questions":
+            args = json.loads(tool_call.function.arguments)
+            return args.get("questions", [])
+        return []
     
-    module = data['module']
-    rules = data['Rules']
-    book_details = data['BookDetails']
-    content = data['content']
-    # This is now the PROVIDER name (e.g., "gemini", "openai") thanks to our schema
-    provider_name = data['model'] 
+    raise ServiceError(f"Unsupported model provider: {provider_name}", status_code=400)
+
+
+async def generate_questions_from_prompt_async(data):
+    """
+    Handles logic of calling the selected LLM provider concurrently for all rules.
+    """
+    provider_name = data['model']
     
+    provider_instance = None
+    if provider_name == 'gemini':
+        provider_instance = genai.GenerativeModel(
+            model_name=current_app.config['GEMINI_MODEL_NAME'],
+            tools=[gemini_tool],
+            tool_config={"function_calling_config": "ANY"}
+        )
+    elif provider_name == 'deepseek':
+        provider_instance = async_clients.deepseek
+    elif provider_name == 'openai':
+        provider_instance = async_clients.openai
+    
+    if provider_instance is None:
+        raise ServiceError(f"Unsupported model provider: {provider_name}", status_code=400)
+
+    tasks = [
+        _generate_single_rule(
+            provider_instance,
+            generate_prompt(data['module'], rule, rule.get("numberOfQuestions", 1), data['BookDetails'], data['content']),
+            provider_name
+        )
+        for rule in data['Rules']
+    ]
+
+    current_app.logger.info(f"Dispatching {len(tasks)} tasks to '{provider_name}' concurrently.")
+
     all_generated_questions = []
+    try:
+        results_from_api = await asyncio.gather(*tasks, return_exceptions=True)
 
-    for rule in rules:
-        num_questions = rule.get("numberOfQuestions", 1)
-        prompt_text = generate_prompt(module, rule, num_questions, book_details, content)
-        questions_from_api = []
-
-        current_app.logger.info(f"Processing rule with provider '{provider_name}' to generate {num_questions} question(s)...")
-
-        try:
-            if provider_name == 'gemini':
-                # 1. Get the specific model name from config
-                model_name = current_app.config['GEMINI_MODEL_NAME']
-                gemini_model = genai.GenerativeModel(
-                    model_name=model_name,
-                    tools=[gemini_tool],
-                    tool_config={"function_calling_config": "ANY"}
+        for i, result in enumerate(results_from_api):
+            rule = data['Rules'][i]
+            if isinstance(result, Exception):
+                error_logger.error(
+                    f"Error processing rule {rule['questionId']} with {provider_name}: {result}"
                 )
-                response = gemini_model.generate_content(prompt_text)
-                part = response.candidates[0].content.parts[0]
-
-                if hasattr(part, 'function_call') and part.function_call.name == "submit_questions":
-                    questions_from_api = part.function_call.args.get("questions", [])
-                else:
-                    error_logger.warning(f"Gemini did not use the 'submit_questions' tool.")
-                    if hasattr(part, 'text'):
-                        error_logger.warning(f"Gemini Response Text: {part.text}")
+                continue
             
-            elif provider_name in ['deepseek', 'openai']:
-                # This logic block handles both OpenAI and DeepSeek
-                
-                if provider_name == 'deepseek':
-                    client = clients.deepseek
-                    model_name = current_app.config['DEEPSEEK_MODEL_NAME']
-                else: # provider_name == 'openai'
-                    client = clients.openai
-                    model_name = current_app.config['OPENAI_MODEL_NAME']
-
-                response = client.chat.completions.create(
-                    model=model_name,
-                    messages=[{"role": "user", "content": prompt_text}],
-                    tools=[OPENAI_COMPATIBLE_TOOL], # Use the compatible tool format
-                    tool_choice="auto"
-                )
-                tool_call = response.choices[0].message.tool_calls[0]
-                if tool_call.function.name == "submit_questions":
-                    args = json.loads(tool_call.function.arguments)
-                    questions_from_api = args.get("questions", [])
-            
-            else:
-                # This case should theoretically not be hit thanks to our Schema validation,
-                # but it's good practice to keep it as a fallback.
-                raise ServiceError(f"Unsupported model provider: {provider_name}", status_code=400)
-
-            # --- Response processing (this part remains the same) ---
-            for q in questions_from_api:
+            for q in result:
                 final_question = {
                     "question": q.get("question", "").strip('"'),
                     "questionLatex": q.get("question_latex", "").strip('"'),
@@ -133,14 +138,15 @@ def generate_questions_from_prompt(data):
                 }
                 all_generated_questions.append(final_question)
 
-        except (IndexError, AttributeError, KeyError, json.JSONDecodeError) as e:
-            error_logger.error(f"Error processing model response from {provider_name}: {e}")
-            if 'response' in locals() and response:
-                 error_logger.error(f"Full Response: {response}")
-            raise ServiceError(f"Failed to process the model's response. Please check logs.", status_code=500)
+    except (google_exceptions.GoogleAPICallError, APIError) as api_error:
+        error_logger.error(
+            f"API error during calls to {provider_name}: {api_error}", exc_info=True
+        )
+        raise ServiceError(f"An external service reported an error.", status_code=502)
+    except Exception as e:
+        error_logger.error(
+            f"Unexpected error during API calls to {provider_name}: {e}", exc_info=True
+        )
+        raise ServiceError(f"An external service is unavailable.", status_code=503)
 
-        except Exception as e:
-            error_logger.error(f"An unexpected error occurred while calling the {provider_name} API: {e}", exc_info=True)
-            raise ServiceError(f"An external service required for question generation is currently unavailable: {e}", status_code=503)
-            
     return all_generated_questions

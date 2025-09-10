@@ -3,7 +3,7 @@ from flask_jwt_extended import JWTManager
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import google.generativeai as genai
-from openai import OpenAI
+from openai import AsyncOpenAI 
 
 jwt = JWTManager()
 limiter = Limiter(
@@ -34,8 +34,6 @@ gemini_tool = {
     }
 }
 
-# --- RENAMED --- (from deepseek_tool)
-# This format is compatible with both OpenAI and DeepSeek
 OPENAI_COMPATIBLE_TOOL = {
     "type": "function",
     "function": {
@@ -63,10 +61,12 @@ OPENAI_COMPATIBLE_TOOL = {
     }
 }
 
-class ClientProvider:
+# --- Asynchronous Client Provider ---
+class AsyncClientProvider:
+    """Provides lazily-initialized async clients."""
     def __init__(self):
         self._deepseek_client = None
-        self._openai_client = None 
+        self._openai_client = None
 
     @property
     def deepseek(self):
@@ -74,7 +74,7 @@ class ClientProvider:
             api_key = current_app.config.get("DEEPSEEK_API_KEY")
             if not api_key:
                 raise ValueError("DEEPSEEK_API_KEY not set in config.")
-            self._deepseek_client = OpenAI(
+            self._deepseek_client = AsyncOpenAI(
                 api_key=api_key,
                 base_url="https://api.deepseek.com/v1"
             )
@@ -86,7 +86,8 @@ class ClientProvider:
             api_key = current_app.config.get("OPENAI_API_KEY")
             if not api_key:
                 raise ValueError("OPENAI_API_KEY not set in config.")
-            self._openai_client = OpenAI(api_key=api_key)
+            self._openai_client = AsyncOpenAI(api_key=api_key)
         return self._openai_client
 
-clients = ClientProvider()
+# Instantiate the async provider
+async_clients = AsyncClientProvider()

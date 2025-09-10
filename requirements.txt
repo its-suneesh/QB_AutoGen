@@ -1,11 +1,10 @@
-Flask
+Flask[async]
 Flask-Cors
 Flask-JWT-Extended
 Flask-Limiter
 marshmallow
 python-dotenv
-google-generativeai
+google-generativeai[async]
 openai
-structlog
-guinicorn
+uvicorn
 pymemcache
