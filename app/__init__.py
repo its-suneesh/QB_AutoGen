@@ -17,7 +17,13 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
 
-    CORS(app, resources={r"/*": {"origins": app.config["CORS_ORIGINS"]}})
+    CORS(app, resources={
+        r"/*": {
+            "origins": app.config["CORS_ORIGINS"],
+            "allow_headers": "*", 
+            "expose_headers": "*", 
+        }
+    })
     
     # This will now set up the simple logging system
     setup_logging(app)
