@@ -7,7 +7,7 @@ import logging # --- ADDED ---
 
 from .config import Config
 from .logger import setup_logging
-from .extensions import jwt, limiter, genai
+from .extensions import jwt, genai
 from .routes import main_bp
 from .services import ServiceError
 
@@ -23,7 +23,6 @@ def create_app():
     setup_logging(app)
     
     jwt.init_app(app)
-    limiter.init_app(app)
 
     try:
         genai.configure(api_key=app.config['GOOGLE_API_KEY'])

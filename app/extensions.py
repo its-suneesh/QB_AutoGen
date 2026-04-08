@@ -1,14 +1,9 @@
 from flask import current_app
 from flask_jwt_extended import JWTManager
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 import google.generativeai as genai
 from openai import AsyncOpenAI 
 
 jwt = JWTManager()
-limiter = Limiter(
-    key_func=get_remote_address,
-)
 
 gemini_tool = {
     "name": "submit_questions",

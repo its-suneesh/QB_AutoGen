@@ -1,5 +1,3 @@
-# app/schemas.py
-
 from marshmallow import Schema, fields, validate
 
 class LoginSchema(Schema):

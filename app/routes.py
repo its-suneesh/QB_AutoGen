@@ -2,8 +2,6 @@ import logging
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from marshmallow import ValidationError
-
-from .extensions import limiter
 from .schemas import LoginSchema, GenerateSchema
 from .services import generate_questions_from_prompt_async
 
@@ -49,7 +47,6 @@ def health_check():
     }), 200
 
 @main_bp.route("/login", methods=["POST"])
-@limiter.limit("5 per minute")
 def login():
     """Authenticates a user and returns a JWT."""
     # The global error handler in __init__.py will catch any ValidationError

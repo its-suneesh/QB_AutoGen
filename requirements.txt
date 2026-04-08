@@ -1,10 +1,8 @@
 Flask[async]
 Flask-Cors
 Flask-JWT-Extended
-Flask-Limiter
 marshmallow
 python-dotenv
 google-generativeai[async]
 openai
 uvicorn
-pymemcache
