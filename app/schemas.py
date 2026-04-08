@@ -17,6 +17,7 @@ class RuleSchema(Schema):
     cognitiveLevel = fields.Str(required=True)
     mark = fields.Int(required=True)
     numberOfQuestions = fields.Int(required=True, validate=lambda n: n > 0)
+    courseOutcome = fields.Str(required=True)
 
 class GenerateSchema(Schema):
     module = fields.Str(required=True)
@@ -44,6 +45,6 @@ class LLMToolOutputSchema(Schema):
     from the LLM's tool call.
     """
     questions = fields.List(
-        fields.Nested(_LLMQuestionSchema()), 
+        fields.Nested(_LLMQuestionSchema()),
         required=True
     )
