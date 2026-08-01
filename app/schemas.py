@@ -19,6 +19,7 @@ class RuleSchema(Schema):
 
 class GenerateSchema(Schema):
     module = fields.Str(required=True)
+    unit = fields.Str(required=False, load_default="")
     content = fields.Str(required=True)
     Rules = fields.List(fields.Nested(RuleSchema), required=True)
     BookDetails = fields.List(fields.Nested(BookDetailsSchema), required=True)

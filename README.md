@@ -106,14 +106,14 @@ To run the application with the Flask development server:
 flask run
 ```
 
-The API will be available at `http://127.0.0.1:5000`.
+The API will be available at `http://127.0.0.1:9000`.
 
 ### Production (using Gunicorn)
 
 To run the application using the Gunicorn server as specified in the `Dockerfile`:
 
 ```sh
-gunicorn --workers 4 --bind 0.0.0.0:5000 "run:app"
+gunicorn --workers 4 --bind 0.0.0.0:9000 "run:app"
 ```
 
 ## API Endpoints
@@ -150,6 +150,7 @@ Generates questions based on the provided context and rules. This is a protected
     ```json
     {
         "module": "Linear Algebra",
+        "unit": "Unit 1",
         "content": "Vectors, vector spaces, dot product, cross product, matrices.",
         "Rules": [
             {
@@ -200,10 +201,10 @@ The application can be easily built and run as a Docker container.
     ```
 
 2.  **Run the Docker Container**:
-    Run the container, mapping the container's port 5000 to the host's port 5000. You must also pass the environment variables from your `.env` file.
+    Run the container, mapping the container's port 9000 to the host's port 9000. You must also pass the environment variables from your `.env` file.
 
     ```sh
-    docker run -p 5000:5000 --env-file .env question-generation-api
+    docker run -p 9000:9000 --env-file .env question-generation-api
     ```
 
-The API will now be accessible at `http://localhost:5000`.
+The API will now be accessible at `http://localhost:9000`.

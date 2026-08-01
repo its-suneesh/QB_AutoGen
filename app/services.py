@@ -18,9 +18,10 @@ class ServiceError(Exception):
         super().__init__(message)
         self.status_code = status_code
 
-def generate_prompt(module, rule, num_questions, book_details, content):
+def generate_prompt(module, unit, rule, num_questions, book_details, content):
     book_references = "\n".join([f"- {b['BookName']} (Type: {b['BookType']})" for b in book_details])
     course_outcome = rule.get('courseOutcome', '')
+    unit_line = f"Unit: {unit}" if unit else ""
 
     prompt = f"""
     Task: Generate {num_questions} questions based ONLY on the provided content.
@@ -29,6 +30,7 @@ def generate_prompt(module, rule, num_questions, book_details, content):
 
     Content: "{content}"
     Module: {module}
+    {unit_line}
     Book References:
     {book_references}
 
@@ -116,7 +118,7 @@ async def generate_questions_from_prompt_async(data):
     tasks = [
         _generate_single_rule(
             provider_instance,
-            generate_prompt(data['module'], rule, rule.get("numberOfQuestions", 1), data['BookDetails'], data['content']),
+            generate_prompt(data['module'], data.get('unit', ''), rule, rule.get("numberOfQuestions", 1), data['BookDetails'], data['content']),
             provider_name
         )
         for rule in data['Rules']
