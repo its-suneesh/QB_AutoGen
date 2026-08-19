@@ -3,6 +3,7 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 from marshmallow import ValidationError
+from werkzeug.exceptions import HTTPException
 import logging # --- ADDED ---
 
 from .config import Config
@@ -47,6 +48,10 @@ def create_app():
     @app.errorhandler(ServiceError)
     def handle_service_error(e):
         return jsonify({"error": "Service Error", "message": str(e)}), e.status_code
+
+    @app.errorhandler(HTTPException)
+    def handle_http_exception(e):
+        return jsonify({"error": e.name, "message": e.description}), e.code
 
     @app.errorhandler(Exception)
     def handle_generic_exception(e):

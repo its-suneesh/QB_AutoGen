@@ -21,6 +21,20 @@ def log_request_info():
             f"from {request.remote_addr} | User-Agent: {request.user_agent.string}"
         )
 
+@main_bp.route("/", methods=["GET"])
+def index():
+    """Root endpoint listing the available API endpoints."""
+    return jsonify({
+        "service": "QB AutoGen API",
+        "message": "Dynamic Question Generation API",
+        "available_endpoints": [
+            "/",
+            "/health",
+            "/login",
+            "/generate_questions"
+        ]
+    }), 200
+
 @main_bp.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'])
 def handle_all(path):
     app_logger.info(
