@@ -1,9 +1,6 @@
 from flask import current_app
-from flask_jwt_extended import JWTManager
 import google.generativeai as genai
-from openai import AsyncOpenAI 
-
-jwt = JWTManager()
+from openai import AsyncOpenAI
 
 gemini_tool = {
     "name": "submit_questions",

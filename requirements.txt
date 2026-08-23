@@ -1,6 +1,5 @@
 Flask[async]
 Flask-Cors
-Flask-JWT-Extended
 marshmallow
 python-dotenv
 google-generativeai[async]

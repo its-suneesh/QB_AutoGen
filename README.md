@@ -100,21 +100,29 @@ The application requires several environment variables for its configuration.
 
 ### Local Development
 
-To run the application with the Flask development server:
+Start the service the same way in development and in production:
 
 ```sh
-flask run
+python run.py
 ```
 
-The API will be available at `http://127.0.0.1:9000`.
+It listens on the `HOST` and `PORT` from your `.env` - `http://127.0.0.1:9000`
+with the shipped defaults - and runs `WORKERS` uvicorn worker processes.
 
-### Production (using Gunicorn)
+### Changing the port
 
-To run the application using the Gunicorn server as specified in the `Dockerfile`:
+`PORT` in `.env` is the only place the port is written. `run.py` binds it, the
+Dockerfile's healthcheck and `docker-compose.yml` read the same value, and the
+`make health` target picks it up too, so a deployment moves the service by
+editing one line and restarting:
 
-```sh
-gunicorn --workers 4 --bind 0.0.0.0:9000 "run:app"
+```ini
+PORT="9100"
 ```
+
+Two things live outside this project and still need the new number: whatever
+reverse proxy or firewall rule fronts the service, and the `QbAutoGen` URL in
+the OnlineTCS .NET app's `appsettings.json`, which is what actually calls it.
 
 ## API Endpoints
 
@@ -201,7 +209,10 @@ The application can be easily built and run as a Docker container.
     ```
 
 2.  **Run the Docker Container**:
-    Run the container, mapping the container's port 9000 to the host's port 9000. You must also pass the environment variables from your `.env` file.
+    Publish the container's port on the host. `--env-file .env` carries `PORT`
+    in, so the two numbers below are just that same `PORT` twice; with
+    `docker-compose up` you do not even write them, as compose reads `PORT`
+    from `.env` itself.
 
     ```sh
     docker run -p 9000:9000 --env-file .env question-generation-api

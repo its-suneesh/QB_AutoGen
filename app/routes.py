@@ -1,8 +1,7 @@
 import logging
 from flask import Blueprint, request, jsonify, current_app
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from marshmallow import ValidationError
-from .schemas import LoginSchema, GenerateSchema
+from .schemas import GenerateSchema
 from .services import generate_questions_from_prompt_async
 
 main_bp = Blueprint('main', __name__)
@@ -30,8 +29,7 @@ def index():
         "available_endpoints": [
             "/",
             "/health",
-            "/login",
-            "/generate_questions"
+                "/generate_questions"
         ]
     }), 200
 
@@ -46,8 +44,7 @@ def handle_all(path):
         "message": f"The requested endpoint '/{path}' does not exist",
         "available_endpoints": [
             "/",
-            "/login",
-            "/generate_questions"
+                "/generate_questions"
         ]
     }), 404
 
@@ -60,33 +57,33 @@ def health_check():
         "version": "1.0.0"
     }), 200
 
-@main_bp.route("/login", methods=["POST"])
-def login():
-    """Authenticates a user and returns a JWT."""
-    # The global error handler in __init__.py will catch any ValidationError
-    data = LoginSchema().load(request.json)
-    username = data["username"]
-    password = data["password"]
-
-    if username == current_app.config["ADMIN_USERNAME"] and password == current_app.config["ADMIN_PASSWORD"]:
-        access_token = create_access_token(identity=username)
-        security_logger.info(
-            f"Login success for user '{username}' from {request.remote_addr}"
-        )
-        return jsonify(access_token=access_token)
-    else:
-        security_logger.warning(
-            f"Login failed: Invalid credentials from {request.remote_addr}"
-        )
-        return jsonify({"error": "Bad username or password"}), 401
+# THIS SERVICE AUTHENTICATES NOBODY.
+#
+# Callers reach it through QuestionBankController.GenerateAiQuestions in the
+# OnlineTCS .NET backend, which carries [Authorize] and so admits only a
+# signed-in user holding the ordinary login token - the same gate as every other
+# endpoint in the portal, the question-paper ones included.
+#
+# Two earlier arrangements were removed. A /login endpoint here authenticated
+# one shared admin username and password, which the Angular app had to carry to
+# use it - so the password shipped inside the JavaScript bundle every browser
+# downloads, readable by anyone and enough to spend this service's LLM quota.
+# After that, the backend's own token was checked here as well; that added no
+# security over [Authorize], since it is the same token, but it required this
+# service to keep a copy of the portal's JWT key, issuer and audience in step by
+# hand - and any drift signed every teacher out of the portal the moment they
+# pressed Generate, because the Angular interceptor logs out on a 401 from
+# anywhere.
+#
+# ON EXPOSURE: with no check here, whatever can reach this service's address can
+# spend its LLM quota. Keeping the portal the only caller is the deployment's
+# job now - a firewall rule, a private network, or a reverse proxy that accepts
+# only the backend - not this process's.
 
 
 @main_bp.route('/generate_questions', methods=['POST'])
-@jwt_required()
 async def generate_questions_endpoint():
-    user_identity = get_jwt_identity()
-    app_logger.info(f"Generation endpoint accessed by user '{user_identity}'")
-    
+
     validated_data = GenerateSchema().load(request.json)
     
     generated_questions = await generate_questions_from_prompt_async(validated_data)

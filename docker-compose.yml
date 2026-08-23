@@ -6,18 +6,24 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: qb-autogen-api
+    # PORT comes from .env - compose reads that file for these substitutions,
+    # so the published port follows the one the service listens on.
     ports:
-      - "5000:5000"
+      - "${PORT:-9000}:${PORT:-9000}"
     environment:
       - FLASK_ENV=production
       - PYTHONUNBUFFERED=1
+      # A container must listen on every interface to be reachable from the
+      # host, whatever .env says for a bare-metal run. Values here win over
+      # env_file, so this overrides HOST without editing .env.
+      - HOST=0.0.0.0
     env_file:
       - .env
     volumes:
       - logs:/app/logs
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:${PORT:-9000}/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

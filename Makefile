@@ -1,5 +1,12 @@
 # Makefile for QB AutoGen Docker operations
 
+# The port the service listens on, read straight out of .env so this file
+# never has to be edited when a deployment moves it.
+PORT := $(strip $(subst ",,$(shell sed -n 's/^PORT=//p' .env 2>/dev/null | head -1)))
+ifeq ($(PORT),)
+PORT := 9000
+endif
+
 .PHONY: help build up down logs clean dev restart health
 
 # Default target
@@ -42,7 +49,7 @@ restart:
 # Check application health
 health:
 	@echo "Checking application health..."
-	@curl -f http://localhost:5000/health || echo "Health check failed"
+	@curl -f http://localhost:$(PORT)/health || echo "Health check failed"
 
 # Clean up everything
 clean:

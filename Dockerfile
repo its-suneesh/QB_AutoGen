@@ -32,13 +32,19 @@ RUN mkdir -p logs/app logs/access logs/error logs/security && \
 
 USER appuser
 
-EXPOSE 5000
+# Documentation only - the real port is PORT in .env, read by run.py.
+# Publishing it is docker-compose's job (or -p on docker run).
+EXPOSE 9000
 
 ENV PYTHONUNBUFFERED=1
 ENV FLASK_ENV=production
+# A container has to listen on every interface; .env's loopback default is
+# for bare-metal runs. docker-compose sets this too.
+ENV HOST=0.0.0.0
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:5000/health || exit 1
+    CMD curl -f "http://localhost:${PORT:-9000}/health" || exit 1
 
     
-CMD ["uvicorn", "--host", "0.0.0.0", "--port", "5000", "--workers", "4", "run:app"]
+# run.py binds HOST/PORT/WORKERS from .env, so this line never needs editing.
+CMD ["python", "run.py"]

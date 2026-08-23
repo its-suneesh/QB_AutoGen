@@ -1,9 +1,5 @@
 from marshmallow import Schema, fields, validate
 
-class LoginSchema(Schema):
-    username = fields.Str(required=True)
-    password = fields.Str(required=True)
-
 class BookDetailsSchema(Schema):
     BookName = fields.Str(required=True)
     BookType = fields.Str(required=True)
