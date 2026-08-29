@@ -1,5 +1,6 @@
 from flask import current_app
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from openai import AsyncOpenAI
 
 gemini_tool = {
@@ -25,6 +26,20 @@ gemini_tool = {
         "required": ["questions"]
     }
 }
+
+# What every Gemini call sends alongside the prompt.
+#
+# google-genai has no model object to hang these on - genai.Client is bound to
+# the API key alone - so the model name, the tool and the "you must call it"
+# mode travel with each request instead. mode="ANY" is what the old SDK's
+# tool_config={"function_calling_config": "ANY"} meant: answer by calling
+# submit_questions, never with prose.
+GEMINI_CONFIG = types.GenerateContentConfig(
+    tools=[types.Tool(function_declarations=[gemini_tool])],
+    tool_config=types.ToolConfig(
+        function_calling_config=types.FunctionCallingConfig(mode="ANY")
+    ),
+)
 
 OPENAI_COMPATIBLE_TOOL = {
     "type": "function",
@@ -59,6 +74,16 @@ class AsyncClientProvider:
     def __init__(self):
         self._deepseek_client = None
         self._openai_client = None
+        self._gemini_client = None
+
+    @property
+    def gemini(self):
+        if self._gemini_client is None:
+            api_key = current_app.config.get("GOOGLE_API_KEY")
+            if not api_key:
+                raise ValueError("GOOGLE_API_KEY not set in config.")
+            self._gemini_client = genai.Client(api_key=api_key)
+        return self._gemini_client
 
     @property
     def deepseek(self):

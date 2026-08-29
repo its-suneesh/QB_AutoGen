@@ -1,7 +1,20 @@
-Flask[async]
-Flask-Cors
-marshmallow
-python-dotenv
-google-generativeai[async]
-openai
-uvicorn
+# Versions are pinned so a deploy installs the same set that was tested.
+# To move one, bump it here - never rely on whatever pip resolves that day.
+
+# Flask[async] brings in asgiref; run.py imports it directly (WsgiToAsgi),
+# and app/__init__.py imports werkzeug directly, so both are pinned here too
+# rather than left to float as transitive dependencies.
+Flask[async]==3.1.3
+Werkzeug==3.1.8
+asgiref==3.12.1
+
+Flask-Cors==6.0.5
+marshmallow==4.3.1
+python-dotenv==1.2.3
+
+# LLM clients.
+google-genai==2.20.0
+openai==3.3.1
+
+# ASGI server run.py starts.
+uvicorn==0.52.4

@@ -22,7 +22,7 @@ The project is built with the following major technologies:
   * [cite\_start]**Backend Framework**: Flask [cite: 1]
   * [cite\_start]**Web Server**: Gunicorn [cite: 1]
   * [cite\_start]**Security**: Flask-JWT-Extended, Flask-Limiter [cite: 1]
-  * [cite\_start]**AI Model SDKs**: google-generativeai, openai [cite: 1]
+  * [cite\_start]**AI Model SDKs**: google-genai, openai [cite: 1]
   * [cite\_start]**Data Validation**: marshmallow [cite: 1]
   * [cite\_start]**Logging**: structlog [cite: 1]
   * **Containerization**: Docker

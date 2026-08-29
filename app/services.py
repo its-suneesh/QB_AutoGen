@@ -3,12 +3,11 @@ import json
 import re
 import asyncio
 from flask import current_app
-import google.generativeai as genai
-from google.api_core import exceptions as google_exceptions
+from google.genai import errors as genai_errors
 from marshmallow import ValidationError
-from openai import APIError
+from openai import APIError as OpenAIAPIError
 
-from .extensions import gemini_tool, OPENAI_COMPATIBLE_TOOL, async_clients
+from .extensions import GEMINI_CONFIG, OPENAI_COMPATIBLE_TOOL, async_clients
 from .schemas import LLMToolOutputSchema
 
 
@@ -188,9 +187,14 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content):
     11. **Mathematics Rule**: If the reference book and module relate to Mathematics, the questions should be mathematical, i.e., more numerical problems rather than theoretical ones.
 
     12. **Diagrams**: When a question is genuinely clearer with a figure - coordinate geometry, the graph of a function, a triangle or circle construction, a tree, a network, a circuit, a chemical structure, a vector diagram - include ONE figure in "question_latex".
-        - Give the PICTURE ONLY: \begin{{tikzpicture}} ... \end{{tikzpicture}}, or \begin{{circuitikz}} ... \end{{circuitikz}}, or \chemfig{{...}}. Never write \documentclass, \usepackage, \usetikzlibrary or \begin{{document}} - the question paper supplies all of that, and a second \documentclass inside it breaks the whole paper rather than the one question.
+        - Give the PICTURE ONLY, in one of these forms: \begin{{tikzpicture}} ... \end{{tikzpicture}}, \begin{{circuitikz}} ... \end{{circuitikz}}, \begin{{pspicture}} ... \end{{pspicture}}, \begin{{forest}} ... \end{{forest}}, \begin{{venndiagram3sets}} ... \end{{venndiagram3sets}}, \begin{{tikzcd}} ... \end{{tikzcd}}, \begin{{modiagram}} ... \end{{modiagram}}, \begin{{asy}} ... \end{{asy}}, \chemfig{{...}}, \smartdiagram[...]{{...}}, or \feynmandiagram [...] {{...}}. Never write \documentclass, \usepackage, \usetikzlibrary or \begin{{document}} - the question paper supplies all of that, and a second \documentclass inside it breaks the whole paper rather than the one question.
         - It is a TEXT-mode environment: do NOT put it inside $...$. Rule 7 does not apply to the contents of a picture.
-        - These packages are already loaded and may be used freely: pgfplots (\begin{{axis}}, \addplot), circuitikz, chemfig, tikz-cd, mhchem, siunitx, amssymb.
+        - These packages are already loaded and may be used freely. Choose the one that fits the subject instead of drawing everything with plain tikz - the specialised package gets the conventions right (arrow styles, level spacing, ray tracing) where a hand-drawn tikz version usually does not:
+            * Mathematics - pgfplots (\begin{{axis}}, \addplot) for the graph of a function or a data plot; tkz-euclide (\tkzDefPoint, \tkzDrawPolygon, \tkzDrawCircle, \tkzMarkAngle) for geometry constructions; tkz-graph (\SetGraphUnit, \Vertex, \Edge) for graph theory; venndiagram (venndiagram2sets, venndiagram3sets, \fillACapB and friends) for sets; tikz-cd for commutative diagrams; asymptote (\begin{{asy}} ... \end{{asy}}) when the figure needs loops, functions or real 3D.
+            * Physics - circuitikz for circuits; pst-optic (\lens, \mirror inside \begin{{pspicture}}) for ray diagrams through lenses and mirrors; tikz-3dplot (\tdplotsetmaincoords, tdplot_main_coords) for 3D axes, vectors and solids; tikz-feynman (\feynmandiagram) for particle interactions; physics (\dv, \pdv, \grad, \curl, \abs, \norm, \ket); siunitx (\qty{{9.8}}{{\meter\per\second\squared}}, \si) for every quantity with a unit.
+            * Chemistry - chemfig for structural formulas, rings and mechanisms; mhchem (\ce{{H2SO4 + 2NaOH -> Na2SO4 + 2H2O}}) for equations; chemformula (\ch) as the alternative to it; chemmacros (\ox{{2,Ca}} for oxidation numbers, \pH); modiagram for molecular orbital diagrams - in \molecule the keys are 1sMO, 2sMO and 2pMO, NOT 1s/2s/2p, which silently draw nothing.
+            * Biology and general - forest for classification trees, cladograms and pedigree charts (it computes the spacing, unlike tikz's trees library); smartdiagram[circular diagram]{{...}} for life cycles and processes; amssymb.
+        - graphicx and svg are NOT usable here: this figure arrives as code and there is no file to include. Everything must be drawn by the code itself.
         - These tikz libraries are already loaded and may be used freely, WITHOUT writing \usetikzlibrary: arrows.meta, calc, positioning, fit, matrix, chains, shapes.geometric, shapes.misc, shapes.symbols, patterns, patterns.meta, intersections, through, angles, quotes, decorations.markings, decorations.pathmorphing, decorations.pathreplacing, decorations.text, backgrounds, plotmarks, trees, 3d, fadings, calendar.
         - Prefer pgfplots for the graph of a function: it draws the axes, ticks and labels itself, which comes out more accurate than placing them by hand.
         - For a hand-plotted curve use the variable \x, for example: \draw[domain=-2:2] plot (\x, {{\x*\x}});
@@ -231,14 +235,10 @@ def _is_retryable(error):
         status = getattr(error, "status_code", None)
     if isinstance(status, int) and status in _RETRYABLE_STATUSES:
         return True
-    # google-api-core raises dedicated classes for the transient cases; the HTTP
-    # code is not always populated on them.
-    return isinstance(error, (
-        google_exceptions.TooManyRequests,
-        google_exceptions.ServiceUnavailable,
-        google_exceptions.InternalServerError,
-        google_exceptions.DeadlineExceeded,
-    ))
+    # google-genai puts the HTTP status on every APIError, so the check above
+    # already catches 429 and the 5xx list by code. ServerError - any 5xx - is
+    # the backstop for a transient status that is not in it.
+    return isinstance(error, genai_errors.ServerError)
 
 
 async def _generate_single_rule(provider_instance, prompt_text, provider_name):
@@ -253,7 +253,7 @@ async def _generate_single_rule(provider_instance, prompt_text, provider_name):
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             return await _call_provider(provider_instance, prompt_text, provider_name)
-        except (google_exceptions.GoogleAPICallError, APIError) as error:
+        except (genai_errors.APIError, OpenAIAPIError) as error:
             last_error = error
             if not _is_retryable(error) or attempt == _MAX_ATTEMPTS:
                 raise
@@ -275,9 +275,18 @@ async def _generate_single_rule(provider_instance, prompt_text, provider_name):
 async def _call_provider(provider_instance, prompt_text, provider_name):
     """Makes a single async API call to the specified provider."""
     if provider_name == 'gemini':
-        response = await provider_instance.generate_content_async(prompt_text)
-        part = response.candidates[0].content.parts[0]
-        if hasattr(part, 'function_call') and part.function_call.name == "submit_questions":
+        response = await provider_instance.aio.models.generate_content(
+            model=current_app.config['GEMINI_MODEL_NAME'],
+            contents=prompt_text,
+            config=GEMINI_CONFIG,
+        )
+        # google-genai returns pydantic models, where an absent part is a field
+        # holding None rather than a missing attribute - hasattr() is always
+        # true here, so it has to be tested for None instead. parts itself is
+        # None when the model returned no content at all.
+        parts = response.candidates[0].content.parts or []
+        part = parts[0] if parts else None
+        if part is not None and part.function_call and part.function_call.name == "submit_questions":
             try:
                 validated = LLMToolOutputSchema().load(dict(part.function_call.args))
                 return validated["questions"]
@@ -326,11 +335,10 @@ async def generate_questions_from_prompt_async(data):
 
     provider_instance = None
     if provider_name == 'gemini':
-        provider_instance = genai.GenerativeModel(
-            model_name=current_app.config['GEMINI_MODEL_NAME'],
-            tools=[gemini_tool],
-            tool_config={"function_calling_config": "ANY"}
-        )
+        # The model name and the tool ride with each request now (GEMINI_CONFIG
+        # in _call_provider), so gemini hands back a reusable client here just
+        # like the other two providers.
+        provider_instance = async_clients.gemini
     elif provider_name == 'deepseek':
         provider_instance = async_clients.deepseek
     elif provider_name == 'openai':
@@ -359,7 +367,7 @@ async def generate_questions_from_prompt_async(data):
             f"Timed out after 180s waiting for {provider_name} responses for all rules."
         )
         raise ServiceError("The AI service took too long to respond.", status_code=504)
-    except (google_exceptions.GoogleAPICallError, APIError) as api_error:
+    except (genai_errors.APIError, OpenAIAPIError) as api_error:
         error_logger.error(
             f"API error during calls to {provider_name}: {api_error}", exc_info=True
         )

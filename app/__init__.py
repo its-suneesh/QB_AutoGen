@@ -8,7 +8,7 @@ import logging # --- ADDED ---
 
 from .config import Config
 from .logger import setup_logging
-from .extensions import genai
+from .extensions import async_clients
 from .routes import main_bp
 from .services import ServiceError
 
@@ -29,8 +29,12 @@ def create_app():
     # This will now set up the simple logging system
     setup_logging(app)
 
+    # Built here rather than on first use so a bad key fails at startup, the way
+    # the old genai.configure() call did. The provider reads it from
+    # current_app.config, hence the context.
     try:
-        genai.configure(api_key=app.config['GOOGLE_API_KEY'])
+        with app.app_context():
+            async_clients.gemini
         app.logger.info("Gemini API configured successfully.")
     except Exception as e:
         app.logger.critical(f"Error configuring Gemini API: {e}", exc_info=True)
