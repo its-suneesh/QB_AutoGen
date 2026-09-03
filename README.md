@@ -2,11 +2,11 @@
 
 # Dynamic Question Generation API
 
-This project is a secure and robust Flask-based API that dynamically generates educational questions using Large Language Models (LLMs). It can interface with both Google's Gemini and OpenAI-compatible models like DeepSeek to produce a variety of question types based on provided content, book references, and specific generation rules. The application is containerized with Docker for easy deployment and scaling.
+This project is a secure and robust Flask-based API that dynamically generates educational questions using Large Language Models (LLMs). It can interface with Google's Gemini, Anthropic's Claude, and OpenAI-compatible models like DeepSeek to produce a variety of question types based on provided content, book references, and specific generation rules. The application is containerized with Docker for easy deployment and scaling.
 
 ## Key Features
 
-  * [cite\_start]**Dual LLM Support**: Seamlessly switch between Google Gemini and DeepSeek models for question generation by specifying the model in the API request[cite: 5].
+  * **Multiple LLM Providers**: Switch between Google Gemini, Anthropic Claude, OpenAI and DeepSeek for question generation with the `"model"` field of the API request - `"gemini"`, `"claude"`, `"openai"` or `"deepseek"`. Each provider is given the same question-generation contract through its own tool-calling format, so the response shape does not change with the provider.
   * [cite\_start]**Secure Authentication**: Endpoints are protected using JSON Web Tokens (JWT), requiring users to log in to access the generation capabilities[cite: 8].
   * [cite\_start]**Robust Data Validation**: Utilizes Marshmallow schemas to validate all incoming request data, ensuring data integrity and providing clear error messages[cite: 5, 8].
   * [cite\_start]**Rate Limiting**: Implements rate limiting on sensitive endpoints like `/login` to prevent abuse and enhance security[cite: 8].
@@ -22,7 +22,7 @@ The project is built with the following major technologies:
   * [cite\_start]**Backend Framework**: Flask [cite: 1]
   * [cite\_start]**Web Server**: Gunicorn [cite: 1]
   * [cite\_start]**Security**: Flask-JWT-Extended, Flask-Limiter [cite: 1]
-  * [cite\_start]**AI Model SDKs**: google-genai, openai [cite: 1]
+  * [cite\_start]**AI Model SDKs**: google-genai, openai, anthropic [cite: 1]
   * [cite\_start]**Data Validation**: marshmallow [cite: 1]
   * [cite\_start]**Logging**: structlog [cite: 1]
   * **Containerization**: Docker
@@ -92,8 +92,15 @@ The application requires several environment variables for its configuration.
 | `JWT_SECRET_KEY` | [cite\_start]A random, secret key for signing JSON Web Tokens (JWTs)[cite: 2]. |
 | `ADMIN_USERNAME` | [cite\_start]The username for logging into the API[cite: 2]. |
 | `ADMIN_PASSWORD` | [cite\_start]The password for logging into the API[cite: 2]. |
-| `GOOGLE_API_KEY` | [cite\_start]Your API key for the Google Gemini service[cite: 2]. |
-| `DEEPSEEK_API_KEY` | [cite\_start]Your API key for the DeepSeek service[cite: 2]. |
+| `GOOGLE_API_KEY` | [cite\_start]Your API key for the Google Gemini service[cite: 2]. Required - the service will not start without it. |
+| `DEEPSEEK_API_KEY` | [cite\_start]Your API key for the DeepSeek service[cite: 2]. Required - the service will not start without it. |
+| `OPENAI_API_KEY` | Your API key for OpenAI. Required - the service will not start without it. |
+| `ANTHROPIC_API_KEY` | Your API key for Anthropic (Claude), from `console.anthropic.com`. **Optional**: the service starts without it, and only a request asking for `"model": "claude"` fails - with a 503 naming the missing key - so an existing deployment does not have to set it. |
+| `GEMINI_MODEL_NAME` | Gemini model to call. Defaults to `gemini-3.5-flash`. |
+| `DEEPSEEK_MODEL_NAME` | DeepSeek model to call. Defaults to `deepseek-chat`. |
+| `OPENAI_MODEL_NAME` | OpenAI model to call. Defaults to `gpt-4-turbo`. |
+| `ANTHROPIC_WORKSPACE_ID` | Only for an *identity-linked* Anthropic key, which is not tied to one workspace: such a key is rejected with `anthropic-workspace-id is required when authenticating with an identity-linked API key` until this is set. Find it in the Anthropic Console URL when the workspace is open. Leave empty for an ordinary workspace key. |
+| `CLAUDE_MODEL_NAME` | Claude model to call. Defaults to `claude-opus-5`; `claude-sonnet-5` is the cheaper alternative. |
 | `CORS_ORIGINS` | [cite\_start]Comma-separated list of allowed origins for CORS requests[cite: 2]. |
 
 ## Running the Application
@@ -176,9 +183,13 @@ Generates questions based on the provided context and rules. This is a protected
                 "BookType": "Textbook"
             }
         ],
-        "model": "gemini-pro"
+        "model": "gemini"
     }
     ```
+    `model` selects the provider, and must be one of `"gemini"`, `"claude"`,
+    `"openai"` or `"deepseek"`. Which model each of those calls is set in
+    `.env` - see the configuration table above - so the request never names a
+    model version.
   * **Success Response (200 OK)**:
     ```json
     {
@@ -196,6 +207,61 @@ Generates questions based on the provided context and rules. This is a protected
         ]
     }
     ```
+
+### 3\. Index a Textbook
+
+Called by the portal when someone uploads a textbook, so the generator can
+quote the book instead of guessing from its title. Only available when
+`RAG_ENABLED=true`; otherwise it answers `503` and the portal carries on.
+
+  - **URL**: `/rag/index`
+  - **Method**: `POST`
+  - **Body**: `multipart/form-data`
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `file` | yes | The PDF, up to 25 MB |
+| `doc_id` | yes | Stored file stem, `<slot>_<paperNameId>` — e.g. `1_734` |
+| `BookName` | no | Title, used in the citations shown to the model |
+| `BookType` | no | `T` (text) or `R` (reference) |
+
+The PDF is posted as bytes rather than as a link, so this service needs no
+address for the portal and never reaches back into it.
+
+  - **Success Response** (`200`):
+
+    ```json
+    {
+        "doc_id": "1_734",
+        "status": "indexed",
+        "pages": 214,
+        "chunks": 96,
+        "quality": 0.97,
+        "reindexed": true,
+        "message": "Indexed - this book can now be used for question generation."
+    }
+    ```
+
+`status` is one of:
+
+| Status | Meaning |
+| --- | --- |
+| `indexed` | Usable for question generation |
+| `needs_ocr` | Scanned — no text layer to index |
+| `low_quality` | Text came out, but too garbled to generate from |
+| `failed` | The PDF could not be opened |
+
+Re-posting an unchanged file returns `reindexed: false` without re-embedding
+it. Re-posting different bytes under the same `doc_id` replaces the old
+chunks, so the portal reusing a file name for another book self-heals.
+
+### 4\. Textbook Index Status
+
+  - **URL**: `/rag/status/<paper_id>`
+  - **Method**: `GET`
+
+Returns one entry per indexed book of that course, in the same shape as above,
+so the portal can show which books an AI-generated paper could draw on.
 
 ## Docker Deployment
 

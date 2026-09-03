@@ -2,16 +2,24 @@ import logging
 import json
 import re
 import asyncio
+from anthropic import APIError as AnthropicAPIError
 from flask import current_app
 from google.genai import errors as genai_errors
 from marshmallow import ValidationError
 from openai import APIError as OpenAIAPIError
 
-from .extensions import GEMINI_CONFIG, OPENAI_COMPATIBLE_TOOL, async_clients
+from .extensions import (
+    CLAUDE_TOOL,
+    CLAUDE_TOOL_CHOICE,
+    GEMINI_CONFIG,
+    OPENAI_COMPATIBLE_TOOL,
+    async_clients,
+)
 from .schemas import LLMToolOutputSchema
 
 
 error_logger = logging.getLogger('error')
+app_logger = logging.getLogger('app')
 
 
 class ServiceError(Exception):
@@ -83,8 +91,17 @@ def _is_multiple_choice(question_type):
     return "objective" in normalised
 
 
-def generate_prompt(module, unit, rule, num_questions, book_details, content):
+def generate_prompt(module, unit, rule, num_questions, book_details, content, source_extracts=""):
     book_references = "\n".join([f"- {b['BookName']} (Type: {b['BookType']})" for b in book_details])
+
+    # Real passages retrieved from the prescribed PDFs (see app/rag.py).
+    # When retrieval is off or finds nothing this stays empty and the prompt
+    # is exactly what it was before, so behaviour never regresses.
+    extracts_block = (
+        "\n    Source Extracts (verbatim from the prescribed book - "
+        "base the questions on THIS text):\n" + source_extracts + "\n"
+        if source_extracts else ""
+    )
     course_outcome = rule.get('courseOutcome', '')
     unit_line = f"Unit: {unit}" if unit else ""
 
@@ -114,8 +131,9 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content):
         mcq_rule = (
             '5.  **Not Multiple-Choice**: This question is "' + question_type + '". '
             "Do NOT write answer choices. There must be no A) B) C) D) options in the "
-            '"question" or in "question_latex". Ask the question directly and let the '
-            '"answer" be the full worked response.'
+            '"question" or in "question_latex". Ask the question directly. The '
+            '"answer" carries the full response in whatever format rule 12 selects '
+            'for this type - prose, a list or a table - not necessarily a paragraph.'
         )
 
     # RAW f-string. Without the r, Python interprets the backslash escapes in the
@@ -138,6 +156,7 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content):
     {unit_line}
     Book References:
     {book_references}
+    {extracts_block}
 
     Follow these rules for each question:
     1.  **Parameters**:
@@ -186,7 +205,19 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content):
 
     11. **Mathematics Rule**: If the reference book and module relate to Mathematics, the questions should be mathematical, i.e., more numerical problems rather than theoretical ones.
 
-    12. **Diagrams**: When a question is genuinely clearer with a figure - coordinate geometry, the graph of a function, a triangle or circle construction, a tree, a network, a circuit, a chemical structure, a vector diagram - include ONE figure in "question_latex".
+    12. **Presentation Format**: The question type is "{question_type}", written by a teacher in their own institution's wording - it may be abbreviated, misspelled, a combination ("Diagram + Table"), or written in another language, so read it for MEANING and not for exact wording. Map it onto these formats and use nothing outside them:
+        - TABLE - a table, tabulation, comparison, matching or truth table: \begin{{tabular}}{{|l|l|}} ... \end{{tabular}}.
+        - FIGURE - a diagram, graph, plot, sketch, circuit, structure, flowchart, tree or map: ONE picture, drawn by the rules below.
+        - ORDERED LIST - steps, stages, an algorithm, a procedure, a ranked sequence, or parts the student answers in turn: \begin{{enumerate}} \item ... \end{{enumerate}}.
+        - UNORDERED LIST - points, features, advantages, differences, characteristics or any unordered set: \begin{{itemize}} \item ... \end{{itemize}}.
+        - PLAIN PROSE - the name asks for none of these: ordinary sentences, no environment at all.
+        How to apply it:
+        - A type may name MORE THAN ONE of them ("Diagram and Table", "List with figure"). Produce every format it names, and none it does not.
+        - A type that names none gets plain prose. Do not add a figure, a table or a list to make the question look fuller.
+        - This governs "question_latex". "answer_latex" takes whatever structure fits the ANSWER, which is often different: a question asked in prose may still be answered as a numbered list, and a question that shows a figure is usually answered in prose.
+        - A list must be the ENVIRONMENT itself, never numbers written inside a sentence, and never hand-typed lines beginning with "1." or "-". WRONG: "For f(x), do the following in order: (1) find the critical points, (2) analyse the sign of the first derivative, (3) classify each point." RIGHT: a short lead-in sentence ending in a colon, then \begin{{enumerate}} \item find the critical points \item analyse the sign of the first derivative \item classify each point \end{{enumerate}}. Numbers inside a sentence are prose: the teacher's editor renders them as one unbroken paragraph, not as the numbered list the question type asked for.
+        - Answer options A) B) C) D) are governed by rule 5 above, never by this rule.
+        When a picture is wanted, draw it by these rules:
         - Give the PICTURE ONLY, in one of these forms: \begin{{tikzpicture}} ... \end{{tikzpicture}}, \begin{{circuitikz}} ... \end{{circuitikz}}, \begin{{pspicture}} ... \end{{pspicture}}, \begin{{forest}} ... \end{{forest}}, \begin{{venndiagram3sets}} ... \end{{venndiagram3sets}}, \begin{{tikzcd}} ... \end{{tikzcd}}, \begin{{modiagram}} ... \end{{modiagram}}, \begin{{asy}} ... \end{{asy}}, \chemfig{{...}}, \smartdiagram[...]{{...}}, or \feynmandiagram [...] {{...}}. Never write \documentclass, \usepackage, \usetikzlibrary or \begin{{document}} - the question paper supplies all of that, and a second \documentclass inside it breaks the whole paper rather than the one question.
         - It is a TEXT-mode environment: do NOT put it inside $...$. Rule 7 does not apply to the contents of a picture.
         - These packages are already loaded and may be used freely. Choose the one that fits the subject instead of drawing everything with plain tikz - the specialised package gets the conventions right (arrow styles, level spacing, ray tracing) where a hand-drawn tikz version usually does not:
@@ -217,6 +248,21 @@ _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 # ~45s, three of them plus the 1s and 2s waits is ~138s, still inside it. A
 # fourth would risk the whole batch timing out to save one rule.
 _MAX_ATTEMPTS = 3
+
+
+# Claude bills its own reasoning against max_tokens alongside the questions, so
+# this one number covers both. 16000 is the SDK's guidance for a non-streaming
+# request: room for a full batch of LaTeX questions, while a truncated answer
+# (stop_reason "max_tokens") still arrives well inside the 180s budget below
+# rather than by hitting an HTTP timeout.
+_CLAUDE_MAX_TOKENS = 16000
+
+# How hard Claude thinks before answering. The API default is "high"; "medium"
+# is used because this is a bounded, exhaustively specified generation task
+# rather than open-ended reasoning, and because every rule in a paper is
+# dispatched at once against that same 180s ceiling. Raise it if the questions
+# need to be better and the batch still finishes in time.
+_CLAUDE_EFFORT = "medium"
 
 
 def _is_retryable(error):
@@ -253,7 +299,7 @@ async def _generate_single_rule(provider_instance, prompt_text, provider_name):
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             return await _call_provider(provider_instance, prompt_text, provider_name)
-        except (genai_errors.APIError, OpenAIAPIError) as error:
+        except (genai_errors.APIError, OpenAIAPIError, AnthropicAPIError) as error:
             last_error = error
             if not _is_retryable(error) or attempt == _MAX_ATTEMPTS:
                 raise
@@ -291,12 +337,12 @@ async def _call_provider(provider_instance, prompt_text, provider_name):
                 validated = LLMToolOutputSchema().load(dict(part.function_call.args))
                 return validated["questions"]
             except ValidationError as e:
-                error_logger.warning(
+                error_logger.error(
                     f"Gemini tool output failed schema validation: {e.messages}"
                 )
                 return []
         else:
-            error_logger.warning(
+            error_logger.error(
                 f"Gemini did not use the 'submit_questions' tool. "
                 f"Response text: {getattr(part, 'text', 'N/A')}"
             )
@@ -318,11 +364,59 @@ async def _call_provider(provider_instance, prompt_text, provider_name):
                 validated = LLMToolOutputSchema().load(args)
                 return validated["questions"]
             except ValidationError as e:
-                error_logger.warning(
+                error_logger.error(
                     f"{provider_name} tool output failed schema validation: {e.messages}"
                 )
                 return []
         return []
+
+    elif provider_name == 'claude':
+        response = await provider_instance.messages.create(
+            model=current_app.config['CLAUDE_MODEL_NAME'],
+            max_tokens=_CLAUDE_MAX_TOKENS,
+            output_config={"effort": _CLAUDE_EFFORT},
+            tools=[CLAUDE_TOOL],
+            tool_choice=CLAUDE_TOOL_CHOICE,
+            messages=[{"role": "user", "content": prompt_text}],
+        )
+        # A thinking block can arrive ahead of the tool call, so the call is
+        # looked up by type rather than taken from content[0] the way the Gemini
+        # branch takes parts[0]. Whether it does depends on the model: Opus 5
+        # thinks by default, Sonnet 4.6 only when asked to.
+        tool_use = next(
+            (
+                block for block in response.content
+                if block.type == "tool_use" and block.name == "submit_questions"
+            ),
+            None,
+        )
+        if tool_use is None:
+            error_logger.error(
+                f"Claude did not use the 'submit_questions' tool "
+                f"(stop_reason: {response.stop_reason}). Response text: "
+                f"{next((b.text for b in response.content if b.type == 'text'), 'N/A')}"
+            )
+            return []
+        try:
+            # Already a dict: the SDK parses the tool arguments, unlike the
+            # OpenAI branch above where they arrive as a JSON string.
+            validated = LLMToolOutputSchema().load(tool_use.input)
+            return validated["questions"]
+        except ValidationError as e:
+            # The payload and stop_reason are logged with it: the message alone
+            # ("Not a valid list") cannot distinguish a model that answered in
+            # the wrong shape from one that was cut off mid-answer, and those
+            # need opposite fixes - a better prompt, or a larger max_tokens.
+            received = tool_use.input
+            error_logger.error(
+                "Claude tool output failed schema validation: %s "
+                "(stop_reason=%s, type=%s, questions=%s) payload: %.800s",
+                e.messages, response.stop_reason, type(received).__name__,
+                type(received.get("questions")).__name__
+                if isinstance(received, dict) else "n/a",
+                received,
+            )
+            return []
 
     raise ServiceError(f"Unsupported model provider: {provider_name}", status_code=400)
 
@@ -334,23 +428,62 @@ async def generate_questions_from_prompt_async(data):
     provider_name = data['model']
 
     provider_instance = None
-    if provider_name == 'gemini':
-        # The model name and the tool ride with each request now (GEMINI_CONFIG
-        # in _call_provider), so gemini hands back a reusable client here just
-        # like the other two providers.
-        provider_instance = async_clients.gemini
-    elif provider_name == 'deepseek':
-        provider_instance = async_clients.deepseek
-    elif provider_name == 'openai':
-        provider_instance = async_clients.openai
+    # Building a client whose API key is absent raises ValueError. Only 'claude'
+    # can actually get here - the other three keys are mandatory at startup - and
+    # it means ANTHROPIC_API_KEY is missing from the server's .env. That is a
+    # deployment fault worth naming, rather than the bare "internal server error"
+    # an unhandled ValueError would return.
+    try:
+        if provider_name == 'gemini':
+            # The model name and the tool ride with each request now (GEMINI_CONFIG
+            # in _call_provider), so gemini hands back a reusable client here just
+            # like the other providers.
+            provider_instance = async_clients.gemini
+        elif provider_name == 'deepseek':
+            provider_instance = async_clients.deepseek
+        elif provider_name == 'openai':
+            provider_instance = async_clients.openai
+        elif provider_name == 'claude':
+            provider_instance = async_clients.claude
+    except ValueError as config_error:
+        error_logger.error(
+            f"Provider '{provider_name}' is not configured: {config_error}"
+        )
+        raise ServiceError(
+            f"The '{provider_name}' provider is not configured on this server.",
+            status_code=503,
+        )
 
     if provider_instance is None:
         raise ServiceError(f"Unsupported model provider: {provider_name}", status_code=400)
 
+    # Pull real passages from the prescribed textbooks once per request and
+    # reuse them for every rule. Returns [] when retrieval is disabled or
+    # unavailable, in which case the prompt is unchanged from before.
+    source_extracts = ""
+    try:
+        from app import rag
+        # "content" alone: it is the unit's syllabus text, which is the only
+        # field describing what the questions must be ABOUT. "unit" is a
+        # position ("Unit 1") and embedding it just pulls the search toward
+        # the book's own chapter headers. rag splits this into its topics.
+        query = data.get("content", "")
+        passages = await asyncio.to_thread(
+            rag.retrieve_for_generation, data["BookDetails"], query
+        )
+        source_extracts = rag.format_passages(passages)
+        if passages:
+            app_logger.info("RAG: %s passages used for generation", len(passages))
+    except Exception:
+        # This module has no plain `logger`; using one here raised NameError
+        # from inside the handler meant to make retrieval harmless, which turned
+        # every generate request into a 500 - the exact opposite of failing open.
+        error_logger.exception("RAG: unavailable, generating from titles only")
+
     tasks = [
         _generate_single_rule(
             provider_instance,
-            generate_prompt(data['module'], data.get('unit', ''), rule, rule.get("numberOfQuestions", 1), data['BookDetails'], data['content']),
+            generate_prompt(data['module'], data.get('unit', ''), rule, rule.get("numberOfQuestions", 1), data['BookDetails'], data['content'], source_extracts),
             provider_name
         )
         for rule in data['Rules']
@@ -367,7 +500,7 @@ async def generate_questions_from_prompt_async(data):
             f"Timed out after 180s waiting for {provider_name} responses for all rules."
         )
         raise ServiceError("The AI service took too long to respond.", status_code=504)
-    except (genai_errors.APIError, OpenAIAPIError) as api_error:
+    except (genai_errors.APIError, OpenAIAPIError, AnthropicAPIError) as api_error:
         error_logger.error(
             f"API error during calls to {provider_name}: {api_error}", exc_info=True
         )

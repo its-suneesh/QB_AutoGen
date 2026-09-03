@@ -1,3 +1,4 @@
+from anthropic import AsyncAnthropic
 from flask import current_app
 from google import genai
 from google.genai import types
@@ -68,6 +69,48 @@ OPENAI_COMPATIBLE_TOOL = {
     }
 }
 
+# The same contract a third time, in Anthropic's shape.
+#
+# Claude takes a JSON Schema under "input_schema" - not "parameters" as OpenAI
+# does, and not Gemini's upper-case type names - so the three definitions cannot
+# be one shared dict however alike they read.
+CLAUDE_TOOL = {
+    "name": "submit_questions",
+    "description": (
+        "Submits a list of generated questions. Call this exactly once, with "
+        "every question that was asked for."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "questions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string"},
+                        "answer": {"type": "string"},
+                        "question_latex": {"type": "string"},
+                        "answer_latex": {"type": "string"}
+                    },
+                    "required": ["question", "answer", "question_latex", "answer_latex"]
+                }
+            }
+        },
+        "required": ["questions"]
+    }
+}
+
+# Answer by calling submit_questions, never with prose - what mode="ANY" does
+# for Gemini above. disable_parallel_tool_use holds it to the single call
+# _call_provider reads; left off, a large batch can arrive split across several
+# tool_use blocks in the one response and everything after the first is dropped.
+CLAUDE_TOOL_CHOICE = {
+    "type": "tool",
+    "name": "submit_questions",
+    "disable_parallel_tool_use": True,
+}
+
 # --- Asynchronous Client Provider ---
 class AsyncClientProvider:
     """Provides lazily-initialized async clients."""
@@ -75,6 +118,7 @@ class AsyncClientProvider:
         self._deepseek_client = None
         self._openai_client = None
         self._gemini_client = None
+        self._claude_client = None
 
     @property
     def gemini(self):
@@ -105,6 +149,31 @@ class AsyncClientProvider:
                 raise ValueError("OPENAI_API_KEY not set in config.")
             self._openai_client = AsyncOpenAI(api_key=api_key)
         return self._openai_client
+
+    @property
+    def claude(self):
+        # The key is passed explicitly rather than left to AsyncAnthropic's own
+        # environment lookup, so the client is built from the same .env-backed
+        # config as the other three and a missing key is reported here by name
+        # instead of failing later inside the SDK.
+        if self._claude_client is None:
+            api_key = current_app.config.get("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise ValueError("ANTHROPIC_API_KEY not set in config.")
+            # The SDK sets this header itself only for its Bedrock and
+            # credential-provider clients, never for a plain api_key one, so an
+            # identity-linked key has to be given the workspace here or every
+            # request comes back 400. Sent only when configured: an ordinary
+            # workspace key does not need it.
+            workspace_id = current_app.config.get("ANTHROPIC_WORKSPACE_ID")
+            headers = (
+                {"anthropic-workspace-id": workspace_id} if workspace_id else None
+            )
+            self._claude_client = AsyncAnthropic(
+                api_key=api_key,
+                default_headers=headers,
+            )
+        return self._claude_client
 
 # Instantiate the async provider
 async_clients = AsyncClientProvider()

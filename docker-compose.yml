@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   qb-autogen-api:
     build:
@@ -17,6 +15,10 @@ services:
       # host, whatever .env says for a bare-metal run. Values here win over
       # env_file, so this overrides HOST without editing .env.
       - HOST=0.0.0.0
+    # The vector store for textbook retrieval is an external Postgres, named by
+    # the single RAG_DATABASE_URL in .env - so it is not started or configured
+    # here. That server needs the pgvector extension enabled once, by a
+    # superuser:  CREATE EXTENSION vector;
     env_file:
       - .env
     volumes:
