@@ -136,7 +136,15 @@ def presentation_rules() -> str:
 
 
 def generate_prompt(module, unit, rule, num_questions, book_details, content, source_extracts=""):
-    book_references = "\n".join([f"- {b['BookName']} (Type: {b['BookType']})" for b in book_details])
+    # A course can legitimately have no books prescribed, in which case the
+    # portal sends "BookDetails": []. Naming the heading with nothing under it
+    # reads to the model as a book list it failed to see, so the whole block is
+    # left out and the questions come from the syllabus content alone.
+    book_references = "\n".join(
+        f"- {b.get('BookName', '')} (Type: {b.get('BookType', '')})"
+        for b in book_details or []
+    )
+    books_block = f"Book References:\n    {book_references}" if book_references else ""
 
     # Real passages retrieved from the prescribed PDFs (see app/rag.py).
     # When retrieval is off or finds nothing this stays empty and the prompt
@@ -198,8 +206,7 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
     Content: "{content}"
     Module: {module}
     {unit_line}
-    Book References:
-    {book_references}
+    {books_block}
     {extracts_block}
 
     Follow these rules for each question:

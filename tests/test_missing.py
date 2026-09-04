@@ -90,5 +90,11 @@ check("the two prompts differ only by that block",
           "base the questions on THIS text):\n[A Book, p.1]\ntext\n", ""),
       True)
 
+no_books = generate_prompt("Module 1", "Unit 1", rule, 2, [], "Vectors", "")
+check("no books -> no empty Book References heading",
+      "Book References" in no_books, False)
+check("no books -> the rest of the prompt is unchanged",
+      "Content: \"Vectors\"" in no_books and "Module: Module 1" in no_books, True)
+
 print("\n%d failed" % len(fails) if fails else "\nall passed")
 raise SystemExit(1 if fails else 0)
