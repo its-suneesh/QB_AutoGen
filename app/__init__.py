@@ -9,7 +9,7 @@ import logging # --- ADDED ---
 from .config import Config
 from .logger import setup_logging
 from .extensions import async_clients
-from .routes import main_bp
+from .api import register as register_routes
 from .services import ServiceError
 
 def create_app():
@@ -40,7 +40,7 @@ def create_app():
         app.logger.critical(f"Error configuring Gemini API: {e}", exc_info=True)
         exit(f"Could not configure Gemini API: {e}")
 
-    app.register_blueprint(main_bp)
+    register_routes(app)
 
     @app.errorhandler(ValidationError)
     def handle_marshmallow_validation(err):

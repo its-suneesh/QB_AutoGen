@@ -25,6 +25,9 @@ services:
       - logs:/app/logs
     restart: unless-stopped
     healthcheck:
+      # /health, not /ready: this decides whether to RESTART the container,
+      # and a database outage is not something restarting fixes. /ready is
+      # for asking whether the service can actually work.
       test: ["CMD-SHELL", "curl -f http://localhost:${PORT:-9000}/health || exit 1"]
       interval: 30s
       timeout: 10s

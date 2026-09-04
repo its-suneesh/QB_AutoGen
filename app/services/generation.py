@@ -4,29 +4,29 @@ import re
 import asyncio
 from anthropic import APIError as AnthropicAPIError
 from flask import current_app
+
+from app import usage
 from google.genai import errors as genai_errors
 from marshmallow import ValidationError
 from openai import APIError as OpenAIAPIError
 
-from .extensions import (
+from app.extensions import (
     CLAUDE_TOOL,
     CLAUDE_TOOL_CHOICE,
     GEMINI_CONFIG,
     OPENAI_COMPATIBLE_TOOL,
     async_clients,
 )
-from .schemas import LLMToolOutputSchema
+from app.schemas import LLMToolOutputSchema
+
+from .errors import ServiceError
 
 
 error_logger = logging.getLogger('error')
 app_logger = logging.getLogger('app')
 
 
-class ServiceError(Exception):
-    """Custom exception for service layer errors."""
-    def __init__(self, message, status_code=503):
-        super().__init__(message)
-        self.status_code = status_code
+
 
 
 # A command written with two backslashes (over-escaped), versus one written
@@ -89,6 +89,50 @@ def _is_multiple_choice(question_type):
     if "multiple" in normalised and "choice" in normalised:
         return True
     return "objective" in normalised
+
+
+def presentation_rules() -> str:
+    """
+    How a question should be laid out, and how a figure should be drawn.
+
+    Split out because it is the same 1650 tokens for every rule of every
+    request, while rules 1-11 above it are not - they carry the cognitive
+    level, the marks and the outcome, and genuinely differ per call.
+
+    A prompt cache matches a PREFIX, so this only earns anything by sitting in
+    front of the request rather than after it. Where it used to be - at the very
+    end of each prompt - a paper asking for five kinds of question paid for it
+    five times and no cache could reach any of them.
+    """
+    return rf"""    12. **Presentation Format**: The question type is the one stated in the request, written by a teacher in their own institution's wording - it may be abbreviated, misspelled, a combination ("Diagram + Table"), or written in another language, so read it for MEANING and not for exact wording. Map it onto these formats and use nothing outside them:
+        - TABLE - a table, tabulation, comparison, matching or truth table: \begin{{tabular}}{{|l|l|}} ... \end{{tabular}}.
+        - FIGURE - a diagram, graph, plot, sketch, circuit, structure, flowchart, tree or map: ONE picture, drawn by the rules below.
+        - ORDERED LIST - steps, stages, an algorithm, a procedure, a ranked sequence, or parts the student answers in turn: \begin{{enumerate}} \item ... \end{{enumerate}}.
+        - UNORDERED LIST - points, features, advantages, differences, characteristics or any unordered set: \begin{{itemize}} \item ... \end{{itemize}}.
+        - PLAIN PROSE - the name asks for none of these: ordinary sentences, no environment at all.
+        How to apply it:
+        - A type may name MORE THAN ONE of them ("Diagram and Table", "List with figure"). Produce every format it names, and none it does not.
+        - A type that names none gets plain prose. Do not add a figure, a table or a list to make the question look fuller.
+        - This governs "question_latex". "answer_latex" takes whatever structure fits the ANSWER, which is often different: a question asked in prose may still be answered as a numbered list, and a question that shows a figure is usually answered in prose.
+        - A list must be the ENVIRONMENT itself, never numbers written inside a sentence, and never hand-typed lines beginning with "1." or "-". WRONG: "For f(x), do the following in order: (1) find the critical points, (2) analyse the sign of the first derivative, (3) classify each point." RIGHT: a short lead-in sentence ending in a colon, then \begin{{enumerate}} \item find the critical points \item analyse the sign of the first derivative \item classify each point \end{{enumerate}}. Numbers inside a sentence are prose: the teacher's editor renders them as one unbroken paragraph, not as the numbered list the question type asked for.
+        - Answer options A) B) C) D) are governed by rule 5 above, never by this rule.
+        When a picture is wanted, draw it by these rules:
+        - Give the PICTURE ONLY, in one of these forms: \begin{{tikzpicture}} ... \end{{tikzpicture}}, \begin{{circuitikz}} ... \end{{circuitikz}}, \begin{{pspicture}} ... \end{{pspicture}}, \begin{{forest}} ... \end{{forest}}, \begin{{venndiagram3sets}} ... \end{{venndiagram3sets}}, \begin{{tikzcd}} ... \end{{tikzcd}}, \begin{{modiagram}} ... \end{{modiagram}}, \begin{{asy}} ... \end{{asy}}, \chemfig{{...}}, \smartdiagram[...]{{...}}, or \feynmandiagram [...] {{...}}. Never write \documentclass, \usepackage, \usetikzlibrary or \begin{{document}} - the question paper supplies all of that, and a second \documentclass inside it breaks the whole paper rather than the one question.
+        - It is a TEXT-mode environment: do NOT put it inside $...$. Rule 7 does not apply to the contents of a picture.
+        - These packages are already loaded and may be used freely. Choose the one that fits the subject instead of drawing everything with plain tikz - the specialised package gets the conventions right (arrow styles, level spacing, ray tracing) where a hand-drawn tikz version usually does not:
+            * Mathematics - pgfplots (\begin{{axis}}, \addplot) for the graph of a function or a data plot; tkz-euclide (\tkzDefPoint, \tkzDrawPolygon, \tkzDrawCircle, \tkzMarkAngle) for geometry constructions; tkz-graph (\SetGraphUnit, \Vertex, \Edge) for graph theory; venndiagram (venndiagram2sets, venndiagram3sets, \fillACapB and friends) for sets; tikz-cd for commutative diagrams; asymptote (\begin{{asy}} ... \end{{asy}}) when the figure needs loops, functions or real 3D.
+            * Physics - circuitikz for circuits; pst-optic (\lens, \mirror inside \begin{{pspicture}}) for ray diagrams through lenses and mirrors; tikz-3dplot (\tdplotsetmaincoords, tdplot_main_coords) for 3D axes, vectors and solids; tikz-feynman (\feynmandiagram) for particle interactions; physics (\dv, \pdv, \grad, \curl, \abs, \norm, \ket); siunitx (\qty{{9.8}}{{\meter\per\second\squared}}, \si) for every quantity with a unit.
+            * Chemistry - chemfig for structural formulas, rings and mechanisms; mhchem (\ce{{H2SO4 + 2NaOH -> Na2SO4 + 2H2O}}) for equations; chemformula (\ch) as the alternative to it; chemmacros (\ox{{2,Ca}} for oxidation numbers, \pH); modiagram for molecular orbital diagrams - in \molecule the keys are 1sMO, 2sMO and 2pMO, NOT 1s/2s/2p, which silently draw nothing.
+            * Biology and general - forest for classification trees, cladograms and pedigree charts (it computes the spacing, unlike tikz's trees library); smartdiagram[circular diagram]{{...}} for life cycles and processes; amssymb.
+        - graphicx and svg are NOT usable here: this figure arrives as code and there is no file to include. Everything must be drawn by the code itself.
+        - These tikz libraries are already loaded and may be used freely, WITHOUT writing \usetikzlibrary: arrows.meta, calc, positioning, fit, matrix, chains, shapes.geometric, shapes.misc, shapes.symbols, patterns, patterns.meta, intersections, through, angles, quotes, decorations.markings, decorations.pathmorphing, decorations.pathreplacing, decorations.text, backgrounds, plotmarks, trees, 3d, fadings, calendar.
+        - Prefer pgfplots for the graph of a function: it draws the axes, ticks and labels itself, which comes out more accurate than placing them by hand.
+        - For a hand-plotted curve use the variable \x, for example: \draw[domain=-2:2] plot (\x, {{\x*\x}});
+        - Write multiplication EXPLICITLY: \x*\x not \x\x, 2*\x not 2\x, 3*(\x+1) not 3(\x+1). The plotting parser rejects the implicit forms outright.
+        - ANY non-English text inside a picture MUST be wrapped: \node {{\foreignlanguage{{malayalam}}{{സമയം}}}}, and likewise for tamil, hindi, arabic and the rest. This one is not cosmetic and not optional. Written bare, the label compiles with NO error, reports success, and draws NOTHING - the characters fall back to a Latin font that has no such glyph. The paper then prints with an unlabelled diagram and nobody finds out until it is in front of the students.
+        - Keep the picture under about 25 lines and label axes or points with \node.
+        - In the plain "question" field, describe the figure in words instead - the plain field must stay free of LaTeX (rule 9).
+        - If a diagram adds nothing to the question, omit it. Never include a decorative figure."""
 
 
 def generate_prompt(module, unit, rule, num_questions, book_details, content, source_extracts=""):
@@ -205,36 +249,11 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
 
     11. **Mathematics Rule**: If the reference book and module relate to Mathematics, the questions should be mathematical, i.e., more numerical problems rather than theoretical ones.
 
-    12. **Presentation Format**: The question type is "{question_type}", written by a teacher in their own institution's wording - it may be abbreviated, misspelled, a combination ("Diagram + Table"), or written in another language, so read it for MEANING and not for exact wording. Map it onto these formats and use nothing outside them:
-        - TABLE - a table, tabulation, comparison, matching or truth table: \begin{{tabular}}{{|l|l|}} ... \end{{tabular}}.
-        - FIGURE - a diagram, graph, plot, sketch, circuit, structure, flowchart, tree or map: ONE picture, drawn by the rules below.
-        - ORDERED LIST - steps, stages, an algorithm, a procedure, a ranked sequence, or parts the student answers in turn: \begin{{enumerate}} \item ... \end{{enumerate}}.
-        - UNORDERED LIST - points, features, advantages, differences, characteristics or any unordered set: \begin{{itemize}} \item ... \end{{itemize}}.
-        - PLAIN PROSE - the name asks for none of these: ordinary sentences, no environment at all.
-        How to apply it:
-        - A type may name MORE THAN ONE of them ("Diagram and Table", "List with figure"). Produce every format it names, and none it does not.
-        - A type that names none gets plain prose. Do not add a figure, a table or a list to make the question look fuller.
-        - This governs "question_latex". "answer_latex" takes whatever structure fits the ANSWER, which is often different: a question asked in prose may still be answered as a numbered list, and a question that shows a figure is usually answered in prose.
-        - A list must be the ENVIRONMENT itself, never numbers written inside a sentence, and never hand-typed lines beginning with "1." or "-". WRONG: "For f(x), do the following in order: (1) find the critical points, (2) analyse the sign of the first derivative, (3) classify each point." RIGHT: a short lead-in sentence ending in a colon, then \begin{{enumerate}} \item find the critical points \item analyse the sign of the first derivative \item classify each point \end{{enumerate}}. Numbers inside a sentence are prose: the teacher's editor renders them as one unbroken paragraph, not as the numbered list the question type asked for.
-        - Answer options A) B) C) D) are governed by rule 5 above, never by this rule.
-        When a picture is wanted, draw it by these rules:
-        - Give the PICTURE ONLY, in one of these forms: \begin{{tikzpicture}} ... \end{{tikzpicture}}, \begin{{circuitikz}} ... \end{{circuitikz}}, \begin{{pspicture}} ... \end{{pspicture}}, \begin{{forest}} ... \end{{forest}}, \begin{{venndiagram3sets}} ... \end{{venndiagram3sets}}, \begin{{tikzcd}} ... \end{{tikzcd}}, \begin{{modiagram}} ... \end{{modiagram}}, \begin{{asy}} ... \end{{asy}}, \chemfig{{...}}, \smartdiagram[...]{{...}}, or \feynmandiagram [...] {{...}}. Never write \documentclass, \usepackage, \usetikzlibrary or \begin{{document}} - the question paper supplies all of that, and a second \documentclass inside it breaks the whole paper rather than the one question.
-        - It is a TEXT-mode environment: do NOT put it inside $...$. Rule 7 does not apply to the contents of a picture.
-        - These packages are already loaded and may be used freely. Choose the one that fits the subject instead of drawing everything with plain tikz - the specialised package gets the conventions right (arrow styles, level spacing, ray tracing) where a hand-drawn tikz version usually does not:
-            * Mathematics - pgfplots (\begin{{axis}}, \addplot) for the graph of a function or a data plot; tkz-euclide (\tkzDefPoint, \tkzDrawPolygon, \tkzDrawCircle, \tkzMarkAngle) for geometry constructions; tkz-graph (\SetGraphUnit, \Vertex, \Edge) for graph theory; venndiagram (venndiagram2sets, venndiagram3sets, \fillACapB and friends) for sets; tikz-cd for commutative diagrams; asymptote (\begin{{asy}} ... \end{{asy}}) when the figure needs loops, functions or real 3D.
-            * Physics - circuitikz for circuits; pst-optic (\lens, \mirror inside \begin{{pspicture}}) for ray diagrams through lenses and mirrors; tikz-3dplot (\tdplotsetmaincoords, tdplot_main_coords) for 3D axes, vectors and solids; tikz-feynman (\feynmandiagram) for particle interactions; physics (\dv, \pdv, \grad, \curl, \abs, \norm, \ket); siunitx (\qty{{9.8}}{{\meter\per\second\squared}}, \si) for every quantity with a unit.
-            * Chemistry - chemfig for structural formulas, rings and mechanisms; mhchem (\ce{{H2SO4 + 2NaOH -> Na2SO4 + 2H2O}}) for equations; chemformula (\ch) as the alternative to it; chemmacros (\ox{{2,Ca}} for oxidation numbers, \pH); modiagram for molecular orbital diagrams - in \molecule the keys are 1sMO, 2sMO and 2pMO, NOT 1s/2s/2p, which silently draw nothing.
-            * Biology and general - forest for classification trees, cladograms and pedigree charts (it computes the spacing, unlike tikz's trees library); smartdiagram[circular diagram]{{...}} for life cycles and processes; amssymb.
-        - graphicx and svg are NOT usable here: this figure arrives as code and there is no file to include. Everything must be drawn by the code itself.
-        - These tikz libraries are already loaded and may be used freely, WITHOUT writing \usetikzlibrary: arrows.meta, calc, positioning, fit, matrix, chains, shapes.geometric, shapes.misc, shapes.symbols, patterns, patterns.meta, intersections, through, angles, quotes, decorations.markings, decorations.pathmorphing, decorations.pathreplacing, decorations.text, backgrounds, plotmarks, trees, 3d, fadings, calendar.
-        - Prefer pgfplots for the graph of a function: it draws the axes, ticks and labels itself, which comes out more accurate than placing them by hand.
-        - For a hand-plotted curve use the variable \x, for example: \draw[domain=-2:2] plot (\x, {{\x*\x}});
-        - Write multiplication EXPLICITLY: \x*\x not \x\x, 2*\x not 2\x, 3*(\x+1) not 3(\x+1). The plotting parser rejects the implicit forms outright.
-        - ANY non-English text inside a picture MUST be wrapped: \node {{\foreignlanguage{{malayalam}}{{സമയം}}}}, and likewise for tamil, hindi, arabic and the rest. This one is not cosmetic and not optional. Written bare, the label compiles with NO error, reports success, and draws NOTHING - the characters fall back to a Latin font that has no such glyph. The paper then prints with an unlabelled diagram and nobody finds out until it is in front of the students.
-        - Keep the picture under about 25 lines and label axes or points with \node.
-        - In the plain "question" field, describe the figure in words instead - the plain field must stay free of LaTeX (rule 9).
-        - If a diagram adds nothing to the question, omit it. Never include a decorative figure.
+    12. **Presentation Format**: follow the presentation and drawing rules
+        given at the start of this conversation, for the question type
+        stated above.
     """
+
     return prompt
 
 
@@ -318,18 +337,33 @@ async def _generate_single_rule(provider_instance, prompt_text, provider_name):
     raise last_error
 
 
+
+def _gemini_config_with_rules():
+    """GEMINI_CONFIG plus the fixed rules as a system instruction."""
+    from google.genai import types
+
+    return types.GenerateContentConfig(
+        system_instruction=presentation_rules(),
+        tools=GEMINI_CONFIG.tools,
+        tool_config=GEMINI_CONFIG.tool_config,
+    )
+
+
 async def _call_provider(provider_instance, prompt_text, provider_name):
     """Makes a single async API call to the specified provider."""
     if provider_name == 'gemini':
+        # system_instruction rather than part of contents: Gemini's implicit
+        # cache matches a shared prefix, and this puts the fixed rules there.
         response = await provider_instance.aio.models.generate_content(
             model=current_app.config['GEMINI_MODEL_NAME'],
             contents=prompt_text,
-            config=GEMINI_CONFIG,
+            config=_gemini_config_with_rules(),
         )
         # google-genai returns pydantic models, where an absent part is a field
         # holding None rather than a missing attribute - hasattr() is always
         # true here, so it has to be tested for None instead. parts itself is
         # None when the model returned no content at all.
+        usage.record_llm("gemini", current_app.config['GEMINI_MODEL_NAME'], response)
         parts = response.candidates[0].content.parts or []
         part = parts[0] if parts else None
         if part is not None and part.function_call and part.function_call.name == "submit_questions":
@@ -371,14 +405,23 @@ async def _call_provider(provider_instance, prompt_text, provider_name):
         return []
 
     elif provider_name == 'claude':
+        # cache_control on the system block covers the tool definition and
+        # these rules together: Claude caches tools, then system, then
+        # messages, so one breakpoint here reaches both.
         response = await provider_instance.messages.create(
             model=current_app.config['CLAUDE_MODEL_NAME'],
             max_tokens=_CLAUDE_MAX_TOKENS,
             output_config={"effort": _CLAUDE_EFFORT},
             tools=[CLAUDE_TOOL],
             tool_choice=CLAUDE_TOOL_CHOICE,
+            system=[{
+                "type": "text",
+                "text": presentation_rules(),
+                "cache_control": {"type": "ephemeral"},
+            }],
             messages=[{"role": "user", "content": prompt_text}],
         )
+        usage.record_llm("claude", current_app.config["CLAUDE_MODEL_NAME"], response)
         # A thinking block can arrive ahead of the tool call, so the call is
         # looked up by type rather than taken from content[0] the way the Gemini
         # branch takes parts[0]. Whether it does depends on the model: Opus 5
@@ -419,6 +462,29 @@ async def _call_provider(provider_instance, prompt_text, provider_name):
             return []
 
     raise ServiceError(f"Unsupported model provider: {provider_name}", status_code=400)
+
+
+
+async def _run_rules(tasks: list) -> list:
+    """
+    Runs the first rule alone, then the rest together.
+
+    A cache entry only exists once a call that WROTE it has returned. Firing
+    every rule at once - as this did - means none of them finds an entry, so
+    each pays the write premium for the same 1650 tokens of rules and the cache
+    never earns anything. One first, then the fan-out, turns those writes into
+    reads at a tenth of the price.
+
+    The cost is one round-trip. A single-rule request warms nothing and pays
+    nothing for it.
+    """
+    if not tasks:
+        return []
+
+    first = await asyncio.gather(tasks[0], return_exceptions=True)
+    if len(tasks) == 1:
+        return first
+    return first + await asyncio.gather(*tasks[1:], return_exceptions=True)
 
 
 async def generate_questions_from_prompt_async(data):
@@ -462,7 +528,7 @@ async def generate_questions_from_prompt_async(data):
     # unavailable, in which case the prompt is unchanged from before.
     source_extracts = ""
     try:
-        from app import rag
+        from app import retrieval as rag
         # "content" alone: it is the unit's syllabus text, which is the only
         # field describing what the questions must be ABOUT. "unit" is a
         # position ("Unit 1") and embedding it just pulls the search toward
@@ -489,12 +555,12 @@ async def generate_questions_from_prompt_async(data):
         for rule in data['Rules']
     ]
 
-    current_app.logger.info(f"Dispatching {len(tasks)} tasks to '{provider_name}' concurrently.")
+    current_app.logger.info(f"Dispatching {len(tasks)} tasks to '{provider_name}'.")
 
     all_generated_questions = []
     try:
         async with asyncio.timeout(180):
-            results_from_api = await asyncio.gather(*tasks, return_exceptions=True)
+            results_from_api = await _run_rules(tasks)
     except TimeoutError:
         error_logger.error(
             f"Timed out after 180s waiting for {provider_name} responses for all rules."
