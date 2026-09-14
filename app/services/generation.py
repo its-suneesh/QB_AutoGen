@@ -131,6 +131,11 @@ def presentation_rules() -> str:
         - Write multiplication EXPLICITLY: \x*\x not \x\x, 2*\x not 2\x, 3*(\x+1) not 3(\x+1). The plotting parser rejects the implicit forms outright.
         - ANY non-English text inside a picture MUST be wrapped: \node {{\foreignlanguage{{malayalam}}{{സമയം}}}}, and likewise for tamil, hindi, arabic and the rest. This one is not cosmetic and not optional. Written bare, the label compiles with NO error, reports success, and draws NOTHING - the characters fall back to a Latin font that has no such glyph. The paper then prints with an unlabelled diagram and nobody finds out until it is in front of the students.
         - Keep the picture under about 25 lines and label axes or points with \node.
+        - Draw ONLY what the question gives the student. A figure in "question_latex" must never show the answer, a step towards it, or any value the student is asked to find - no slope, derivative value, limit, root, intercept, area, maximum or other computed result written on it unless the question itself states it as given data. WRONG: a plot of f(x) carrying the labels "f'(1)=3" and "f'(0.5)". RIGHT: the curve of f(x) with its axes and the points the question names.
+        - Every label must be one the question refers to or one needed to read the figure (axis names, the function's name, named points, given lengths or angles). No extra tangent lines, arrows, shading, notes or annotations beyond that.
+        - The figure must agree exactly with the question: the plotted expression is the question's function, a marked point really lies on the curve at its stated coordinates, the axis ranges show the feature the question is about (the point a limit approaches, a root, a discontinuity, an asymptote), a hole is an open circle and a defined value a filled one, and labelled lengths and angles match the given data.
+        - Never let a plot evaluate a function where it is undefined (for example (\x*\x-1)/(\x-1) at \x=1, or 1/\x at \x=0): split the domain around that point, or the division by zero stops the paper from compiling.
+        - Labels use the same terms as the question, in the same language (rule 10), wrapped by the \foreignlanguage rule above when not English.
         - In the plain "question" field, describe the figure in words instead - the plain field must stay free of LaTeX (rule 9).
         - If a diagram adds nothing to the question, omit it. Never include a decorative figure."""
 
@@ -149,13 +154,38 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
     # Real passages retrieved from the prescribed PDFs (see app/rag.py).
     # When retrieval is off or finds nothing this stays empty and the prompt
     # is exactly what it was before, so behaviour never regresses.
+    #
+    # The header used to say "base the questions on THIS text". A retrieved page
+    # rarely stops where the syllabus topic stops - the page on rules for limits
+    # runs on into derivatives - and the model obeyed that header over the
+    # syllabus, so questions followed the page instead of the topic. The
+    # extracts are reference material for the topic in SCOPE, never the scope.
     extracts_block = (
-        "\n    Source Extracts (verbatim from the prescribed book - "
-        "base the questions on THIS text):\n" + source_extracts + "\n"
+        "\n    Source Extracts (verbatim from the prescribed book - reference "
+        "material only; use ONLY the parts that belong to the syllabus topics in "
+        "SCOPE and ignore the rest):\n" + source_extracts + "\n"
         if source_extracts else ""
     )
     course_outcome = rule.get('courseOutcome', '')
     unit_line = f"Unit: {unit}" if unit else ""
+
+    # A course outcome is usually wider than the one section being asked for
+    # ("limits, continuity and derivatives" for a paper on limits), so "tests the
+    # course outcome" alone pulled questions towards the rest of it. It can also
+    # arrive as a bare code the model can only guess at, or as "" - the schema
+    # requires the key, not a value - which used to ask for alignment with an
+    # outcome that was never given.
+    if course_outcome:
+        co_rule = (
+            '3.  **Course Outcome Alignment**: Within the syllabus topics in SCOPE, test the '
+            f'skill described by the Course Outcome "{course_outcome}". The course outcome decides '
+            'WHAT SKILL is tested, never WHICH TOPIC: if it is broader than the topics, test only '
+            'the part inside them; if it does not fit them, or is only a code such as "CO1", keep '
+            'the question on the topics and do not guess what it covers.'
+        )
+    else:
+        co_rule = ('3.  **Course Outcome Alignment**: No course outcome is given; take the '
+                   'question from the syllabus topics in SCOPE alone.')
 
     # The MCQ rule carries worked "\item[A)] first choice" examples. Left in the
     # prompt unconditionally it was shown to the model for EVERY question type,
@@ -178,6 +208,7 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
           \item[D)] fourth choice
           \end{enumerate}
           Each choice still follows rule 7 - any mathematics inside it must be wrapped in $...$.
+        - Exactly ONE choice is correct. Work it out before writing the choices; the other three must be plausible (a common mistake, a sign or step error) but definitely wrong, and no two choices may be equal.
         - "answer" must be only the correct letter (e.g. "C"), matching the labels above."""
     else:
         mcq_rule = (
@@ -195,7 +226,7 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
     # Literal braces still have to be doubled - {{ }} - because this is an
     # f-string; single braces are replacement fields.
     prompt = rf"""
-    Task: Generate exactly {num_questions} questions based ONLY on the provided content.
+    Task: Generate exactly {num_questions} questions on the syllabus topics given in SCOPE below, and on nothing else.
 
     RESPONSE CONTRACT (MANDATORY):
     - You MUST respond with exactly one function call to the `submit_questions` tool.
@@ -203,9 +234,18 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
     - Your ENTIRE response must be that single function call: no text before or after it, no markdown, no commentary.
     - The JSON MUST be complete and valid. A partial, truncated, or malformed response will be rejected.
 
-    Content: "{content}"
+    SCOPE (MANDATORY - this decides what every question may be about):
     Module: {module}
     {unit_line}
+    Syllabus Topics: "{content}"
+    - Every question must mainly TEST one of the syllabus topics above, as taught in this module and unit. Those topics are the whole of what may be asked.
+    - A question that only mentions the topic while testing something else is OUT of scope. For example, for "Rules for finding limits" every question must require finding or reasoning about a limit by those rules; a question on derivatives, tangents, continuity or integration is out of scope, even when the book covers it on the same page.
+    - Do not take questions from neighbouring material: the previous or next section, another unit or module, or a more advanced topic of the same subject. A prerequisite may be used as a step inside a question about the listed topic, but it must never be what the question tests.
+    - Difficulty never widens the scope. A "Hard" question goes DEEPER into the listed topic - more steps, combined rules, tricky or special cases, less obvious reasoning - and never becomes hard by bringing in a later topic.
+    - When many questions are asked for, vary the sub-topic, method, context and form WITHIN the listed topics rather than drifting to other ones. When several topics are listed, spread the questions across them.
+    - The course outcome, the question type, the book references and the source extracts do NOT widen the scope. Where any of them points outside the listed topics, the listed topics win.
+    - Before submitting, check every question: "Is this question mainly testing a listed syllabus topic?" Replace any that is not.
+
     {books_block}
     {extracts_block}
 
@@ -225,7 +265,7 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
         - Evaluating: "Assess the effectiveness of...", "Justify the use of Method A over Method B..."
         - Creating: "Design a system that...", "Formulate a new equation for...", "Build a comprehensive layout..."
 
-    3.  **Course Outcome Alignment**: Ensure the question directly tests or maps to the stated Course Outcome: "{course_outcome}".
+    {co_rule}
 
     4.  **Output Schema (MANDATORY)**: Each object in the `questions` array MUST be a valid JSON object containing ONLY these 4 keys, all with string values:
         - "question"
@@ -252,13 +292,23 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
 
     9.  **Plain Fields**: "question" and "answer" must be ordinary readable text containing NO LaTeX syntax at all - no backslash commands, no ^, no _, no $. Express the same mathematics there in words or plain notation.
 
-    10. **Language Rule**: Use the language of the title of the reference book/textbook. (e.g., for a Malayalam book, the response should also be in Malayalam.)
+    10. **Language Rule**: Use the language of the title of the reference book/textbook. (e.g., for a Malayalam book, the response should also be in Malayalam.) With no book given, use the language of the syllabus topics. All four fields use that one language.
+        - Use the STANDARD subject terms of that language - the words a textbook of this subject in that language uses - never a word-for-word or invented translation, and never a transliteration of the English word where an established term exists. Where the textbook itself keeps the English term, keep it too.
+        - One concept, one term: the same word in the question and the answer, and in the plain and "_latex" fields.
+        - Mathematical symbols, variables, formulas, units and chemical formulas stay in their standard notation in every language; only the words around them are translated.
 
-    11. **Mathematics Rule**: If the reference book and module relate to Mathematics, the questions should be mathematical, i.e., more numerical problems rather than theoretical ones.
+    11. **Mathematics Rule**: If the reference book and module relate to Mathematics, the questions should be mathematical, i.e., more numerical problems rather than theoretical ones - on the syllabus topics in SCOPE.
 
     12. **Presentation Format**: follow the presentation and drawing rules
         given at the start of this conversation, for the question type
         stated above.
+
+    13. **Correctness (MANDATORY)**: A question paper with a wrong answer is worse than no question.
+        - Solve every question fully before writing it, and check the result - by substitution, a second method, or a units check. The answer must answer exactly what was asked, with its unit.
+        - The given data must be complete and consistent: nothing missing, nothing contradictory, and exactly one correct answer unless the question asks for all of them.
+        - The plain and "_latex" fields are two renderings of ONE question: the same numbers, expressions and final result in "question" and "question_latex", and in "answer" and "answer_latex".
+        - Definitions, laws, formulas, constants and facts must be exactly as the textbook states them. Never invent a formula, a value or a fact.
+        - Choose values that lead to exact, checkable results unless the topic is about approximation; where a decimal is needed, state the rounding.
     """
 
     return prompt
