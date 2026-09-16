@@ -286,6 +286,10 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
         - WRONG: the parabola y^2 = 2x meets the line
           RIGHT: the parabola $y^2 = 2x$ meets the line
         - Mathematics written without delimiters cannot be shown to the teacher and corrupts the printed question paper, so this rule is absolute.
+        - UNITS: write them as ordinary LaTeX inside the maths - $7.4\\,\\text{{kJ mol}}^{{-1}}$, $T = 298\\,\\text{{K}}$ - or with a BRACED \\pu: $\\pu{{7.4 kJ mol-1}}$.
+          A bare \\pu or \\ce with no braces is the one thing that breaks silently: \\pu7.4kJmol-1 takes only the "7" as the quantity, so the paper prints the wrong number and the teacher is shown a red "\\pu" where the units should be.
+          WRONG: $\\Delta G^\\circ = -\\pu7.4kJmol-1$ at $T = \\pu298K$
+          RIGHT: $\\Delta G^\\circ = -\\pu{{7.4 kJ mol-1}}$ at $T = \\pu{{298 K}}$
         - If a question genuinely contains no mathematics, copy the plain text across unchanged.
 
     8.  **Backslashes and Newlines**: Write every LaTeX command with a SINGLE backslash - \frac, not \\frac. Do not escape backslashes. Use real line breaks, never the two characters \n.
