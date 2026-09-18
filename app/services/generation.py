@@ -140,7 +140,7 @@ def presentation_rules() -> str:
         - If a diagram adds nothing to the question, omit it. Never include a decorative figure."""
 
 
-def generate_prompt(module, unit, rule, num_questions, book_details, content, source_extracts=""):
+def generate_prompt(module, unit, rule, num_questions, book_details, content, source_extracts="", units=None, course=None):
     # A course can legitimately have no books prescribed, in which case the
     # portal sends "BookDetails": []. Naming the heading with nothing under it
     # reads to the model as a book list it failed to see, so the whole block is
@@ -169,13 +169,124 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
     course_outcome = rule.get('courseOutcome', '')
     unit_line = f"Unit: {unit}" if unit else ""
 
+    # What the batch may be about. One unit is the prompt exactly as it always
+    # was. Several units list each with its own id and syllabus, and the model is
+    # asked to spread the questions across them and to say which unit each one
+    # tests - the portal files every question under that unit when it is saved.
+    #
+    # The labels are the model's, so they are checked afterwards against the ids
+    # sent here (see generate_questions_from_prompt_async): a question labelled
+    # with an id that was never offered comes back with no unit rather than the
+    # wrong one, and the teacher chooses it.
+    many_units = [u for u in (units or []) if (u.get('unitId') or '').strip()]
+    if len(many_units) > 1:
+        unit_list = "\n".join(
+            f'    - unit_id "{u["unitId"]}" - Unit: {u.get("unit", "")} - '
+            f'Syllabus Topics: "{u.get("content", "")}"'
+            for u in many_units
+        )
+        scope_header = (
+            f"Module: {module}\n"
+            f"    This batch covers {len(many_units)} units. Every question must be about exactly ONE of them:\n"
+            f"{unit_list}\n"
+            f"    - Spread the {num_questions} questions across these units as evenly as the count allows.\n"
+            f'    - Put the unit each question tests in its "unit_id", copied EXACTLY from the list above.'
+        )
+    else:
+        scope_header = f'Module: {module}\n    {unit_line}\n    Syllabus Topics: "{content}"'
+
+    # Several course outcomes, or several cognitive levels, work the way several
+    # units do: the model spreads the questions across them and labels each
+    # question with the one it wrote it for, and the labels are checked against
+    # what was offered (see outcome_for_question and level_for_question). One of
+    # either is the prompt exactly as it always was.
+    outcomes = _offered(rule.get('courseOutcomes'))
+    levels = _offered(rule.get('cognitiveLevels'))
+    many_outcomes = len(outcomes) > 1
+    many_levels = len(levels) > 1
+
+    # Several difficulty levels in one rule - a merged rule, see
+    # _merge_difficulty_rules - are asked for with the number each level gets,
+    # listed level by level, and every question labelled with its level. One
+    # level is the prompt exactly as it always was.
+    difficulties = rule.get('difficulties') or []
+    many_difficulties = len(difficulties) > 1
+    if many_difficulties:
+        parameter_difficulty = ', '.join(f"{d['name']} ({d['count']})" for d in difficulties) + ' - see DIFFICULTY'
+        difficulty_header = f'this batch mixes {len(difficulties)} levels; each question is at exactly ONE of them'
+        difficulty_list = '\n'.join(
+            f'        - difficulty_id "{d["id"]}" - {d["name"]}: exactly {d["count"]} '
+            + ('question' if d['count'] == 1 else 'questions')
+            for d in difficulties
+        )
+        difficulty_rule = (
+            '- Write exactly this many questions at each level, and list them level by level in this order:\n'
+            f'{difficulty_list}\n'
+            '    - Put the level each question is written at in its "difficulty_id", copied EXACTLY from the list above.\n'
+            '    - Keep each question at its own level: the levels must stay clearly apart, an easier level '
+            'clearly easier than a harder one.'
+        )
+    else:
+        parameter_difficulty = rule['difficultyLevel']
+        difficulty_header = f'every question in this batch is "{rule["difficultyLevel"]}"'
+        difficulty_rule = '- Keep every question in this batch at this one level; do not mix easier and harder questions.'
+
+    output_key_lines = ['"question"', '"answer"', '"question_latex"', '"answer_latex"']
+    if len(many_units) > 1:
+        output_key_lines.append('"unit_id" (one of the unit_id values listed in SCOPE)')
+    if many_outcomes:
+        output_key_lines.append('"co_id" (one of the co_id values listed in rule 3)')
+    if many_levels:
+        output_key_lines.append('"cognitive_level_id" (one of the cognitive_level_id values listed in rule 2)')
+    if many_difficulties:
+        output_key_lines.append('"difficulty_id" (one of the difficulty_id values listed under DIFFICULTY)')
+    output_keys = (
+        f'containing ONLY these {len(output_key_lines)} keys, all with string values:\n'
+        + '\n'.join(f'        - {key}' for key in output_key_lines)
+    )
+
+    if many_levels:
+        parameter_level = 'one of ' + ', '.join(level['name'] for level in levels) + ' - see rule 2'
+        level_list = '\n'.join(f'        - cognitive_level_id "{level["id"]}" - {level["name"]}' for level in levels)
+        cognitive_intro = (
+            f'This batch covers {len(levels)} cognitive levels. Write each question at exactly ONE of them:\n'
+            f'{level_list}\n'
+            f'        - Spread the {num_questions} questions across these levels as evenly as the count allows.\n'
+            f'        - Put the level each question is written at in its "cognitive_level_id", copied EXACTLY from the list above.\n'
+            f'        Use these examples as a structural guide for each level:'
+        )
+    else:
+        parameter_level = rule['cognitiveLevel']
+        cognitive_intro = (
+            f'Align the question with the requested "{rule["cognitiveLevel"]}" level '
+            'using these examples as a structural guide:'
+        )
+
     # A course outcome is usually wider than the one section being asked for
     # ("limits, continuity and derivatives" for a paper on limits), so "tests the
     # course outcome" alone pulled questions towards the rest of it. It can also
     # arrive as a bare code the model can only guess at, or as "" - the schema
     # requires the key, not a value - which used to ask for alignment with an
     # outcome that was never given.
-    if course_outcome:
+    parameter_outcome = course_outcome
+    if many_outcomes:
+        parameter_outcome = 'one of ' + ', '.join(
+            outcome.get('code') or outcome['id'] for outcome in outcomes) + ' - see rule 3'
+        outcome_list = '\n'.join(
+            f'        - co_id "{outcome["id"]}" - {outcome.get("code", "")}: "{outcome.get("description", "")}"'
+            for outcome in outcomes
+        )
+        co_rule = (
+            f'3.  **Course Outcome Alignment**: This batch covers {len(outcomes)} course outcomes. '
+            'Within the syllabus topics in SCOPE, each question tests the skill described by exactly ONE of them:\n'
+            f'{outcome_list}\n'
+            f'        - Spread the {num_questions} questions across these outcomes as evenly as the count allows.\n'
+            '        - Put the outcome each question tests in its "co_id", copied EXACTLY from the list above.\n'
+            '        - A course outcome decides WHAT SKILL is tested, never WHICH TOPIC: if one is broader than '
+            'the topics, test only the part inside them; if one does not fit them, keep the question on the '
+            'topics and do not guess what it covers.'
+        )
+    elif course_outcome:
         co_rule = (
             '3.  **Course Outcome Alignment**: Within the syllabus topics in SCOPE, test the '
             f'skill described by the Course Outcome "{course_outcome}". The course outcome decides '
@@ -219,6 +330,41 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
             'for this type - prose, a list or a table - not necessarily a paragraph.'
         )
 
+    # Who the questions are for. With the course known - its programme category
+    # (UG or PG), subject, semester and paper - the level comes from it: an
+    # undergraduate course is pitched below a postgraduate one, and an early
+    # semester below a final one. Without it the questions are pitched at
+    # university level in general, exactly as before.
+    course = course or {}
+    labelled = [
+        ('programme category', course.get('category')),
+        ('programme', course.get('programme')),
+        ('subject', course.get('subject')),
+        ('semester', course.get('semester')),
+        ('course', course.get('paper')),
+    ]
+    details = [f'{label} "{value.strip()}"' for label, value in labelled if (value or '').strip()]
+    if details:
+        audience_lines = (
+            '- The questions are for a university examination in India, for students of this course - '
+            + ', '.join(details)
+            + ' - answering in writing, without books, within a fixed time.\n'
+            "    - Pitch every question at the level of that course. An undergraduate (UG) course - a bachelor's "
+            'programme such as B.A., B.Sc., B.Com., BBA, BCA, B.Tech. or a four-year undergraduate programme - is '
+            "pitched below a postgraduate (PG) course - a master's programme such as M.A., M.Sc., M.Com., MBA, MCA "
+            'or M.Tech.: a PG question expects more depth, rigour and independent application than a UG question '
+            'on the same topic. An early semester expects less than a final one.\n'
+            '    - Even a "Very Easy" question tests university-level content of the listed topics, never '
+            'school-level content.'
+        )
+    else:
+        audience_lines = (
+            '- The questions are for a university examination in India: students of an undergraduate or '
+            'postgraduate course, answering in writing, without books, within a fixed time.\n'
+            '    - Pitch every question at the level of that course. Even a "Very Easy" question tests '
+            'university-level content of the listed topics, never school-level content.'
+        )
+
     # RAW f-string. Without the r, Python interprets the backslash escapes in the
     # LaTeX examples below: "\frac" becomes a form-feed character followed by
     # "rac", and "\x" is outright a SyntaxError. The model was being shown a
@@ -235,16 +381,49 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
     - The JSON MUST be complete and valid. A partial, truncated, or malformed response will be rejected.
 
     SCOPE (MANDATORY - this decides what every question may be about):
-    Module: {module}
-    {unit_line}
-    Syllabus Topics: "{content}"
+    {scope_header}
     - Every question must mainly TEST one of the syllabus topics above, as taught in this module and unit. Those topics are the whole of what may be asked.
     - A question that only mentions the topic while testing something else is OUT of scope. For example, for "Rules for finding limits" every question must require finding or reasoning about a limit by those rules; a question on derivatives, tangents, continuity or integration is out of scope, even when the book covers it on the same page.
     - Do not take questions from neighbouring material: the previous or next section, another unit or module, or a more advanced topic of the same subject. A prerequisite may be used as a step inside a question about the listed topic, but it must never be what the question tests.
-    - Difficulty never widens the scope. A "Hard" question goes DEEPER into the listed topic - more steps, combined rules, tricky or special cases, less obvious reasoning - and never becomes hard by bringing in a later topic.
+    - Difficulty never widens the scope. A "Hard" or "Very Hard" question goes DEEPER into the listed topic - more steps, combined rules, tricky or special cases, less obvious reasoning - and never becomes hard by bringing in a later topic.
     - When many questions are asked for, vary the sub-topic, method, context and form WITHIN the listed topics rather than drifting to other ones. When several topics are listed, spread the questions across them.
     - The course outcome, the question type, the book references and the source extracts do NOT widen the scope. Where any of them points outside the listed topics, the listed topics win.
     - Before submitting, check every question: "Is this question mainly testing a listed syllabus topic?" Replace any that is not.
+
+    AUDIENCE (MANDATORY - who the questions are for):
+    {audience_lines}
+    - Word the questions the way Indian university question papers do, starting with the usual instruction word: Define, State, List, Explain, Describe, Distinguish between, Derive, Prove, Calculate, Find, Solve, Draw a neat diagram, Write short notes on, Justify. In another language, use that language's usual equivalent.
+    - When a question needs a real-life setting, use one familiar to students in India - Indian names, places and situations - with SI (metric) units.
+    - Write money as "Rs." followed by the amount, e.g. Rs. 2,500, never with the ₹ symbol. The printed paper has no glyph for ₹ and silently leaves it out, so the amount would print with no currency.
+
+    SIMPLE LANGUAGE (MANDATORY - for all four fields, question and answer):
+    - Many students are not writing in their first language. Write in simple, clear language that a student understands on the first reading.
+    - Use short sentences, one instruction per sentence, common words and the active voice. Give the data first and the task after it.
+    - Do not use idioms, rare or literary words, double negatives, or a sentence that can be read in two ways.
+    - Keep the subject's technical terms exactly as the textbook uses them - students are expected to know those. Simple language is about the words around the terms.
+    - Simple language never lowers the level. A question is difficult because of the subject, never because its wording is hard to follow.
+    - In a language other than English (rule 10), use the plain, commonly used words of that language together with its standard subject terms.
+
+    INDIAN ENGLISH (MANDATORY when the questions are in English):
+    - Write in Indian English - the formal English of Indian university question papers.
+    - Use British spelling, never American: colour, centre, programme, analyse, organise, behaviour, labour, metre, litre, defence, modelling, travelled. A computer program is still spelt "program".
+    - Use the words used in India: petrol (not gas), mobile phone (not cell phone), lift (not elevator), marks (not points).
+    - Write dates as 15 August 2024 or 15-08-2024, never as August 15, 2024.
+    - Amounts of money may be grouped the Indian way or written in lakh and crore - Rs. 2,50,000 or Rs. 2.5 lakh. Every other number, and every quantity with a unit, is written in the standard international form.
+    - Keep it formal and plain: no Hinglish, slang or regional idioms, so SIMPLE LANGUAGE above still holds.
+    - A question in another language (rule 10) follows that language's own conventions instead.
+
+    DIFFICULTY (MANDATORY - {difficulty_header}):
+    - The level is named in the institution's own words, so read it for meaning and use the nearest of the five levels below - for example "Simple" is Easy, "Moderate" or "Average" is Medium, "Difficult" or "Tough" is Hard.
+    - Each level is judged for a student of this course writing a university examination:
+        - Very Easy: any student who attended the classes answers it at once. One step - state a definition, law or formula as the textbook gives it, or put values straight into one formula. No twist.
+        - Easy: any student who studied the topic answers it. One or two steps using one idea, close to a worked example or exercise in the textbook but with different values or wording.
+        - Medium: a typical university examination question, answered by a student who prepared well. Several steps; the student must choose the right method and apply it to a case that is not the same as a textbook example.
+        - Hard: only a well-prepared student answers it fully. Many steps, two or more ideas from the listed topics combined, careful reasoning, or a special case or condition that is easy to miss.
+        - Very Hard: the most demanding question in the paper; only the best students answer it fully. Non-routine - it needs insight, a derivation or proof, or several results linked together, and it does not follow any worked example. It must still be fair: answerable from the listed topics within the time its marks allow.
+    - Difficulty, cognitive level and marks are separate. The cognitive level decides the KIND of thinking, the marks decide how LONG the answer is, and the difficulty decides how DEMANDING the question is. A 2-mark question can be Very Hard (short, but needs insight); a 10-mark question can be Very Easy (long, but straightforward). For a recall level such as Remembering, a harder level means recalling something less obvious or more precisely - all the conditions of a theorem, a complete classification - not a different kind of thinking.
+    - Make a question harder only through the subject - never through unclear wording, missing or confusing data, long tedious arithmetic, or content outside SCOPE.
+    {difficulty_rule}
 
     {books_block}
     {extracts_block}
@@ -252,12 +431,12 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
     Follow these rules for each question:
     1.  **Parameters**:
         - Question Type: {rule['questionType']}
-        - Difficulty: {rule['difficultyLevel']}
-        - Cognitive Level: {rule['cognitiveLevel']}
+        - Difficulty: {parameter_difficulty}
+        - Cognitive Level: {parameter_level}
         - Marks: {rule['mark']}
-        - Course Outcome: {course_outcome}
+        - Course Outcome: {parameter_outcome}
 
-    2.  **Cognitive Level Guide**: Align the question with the requested "{rule['cognitiveLevel']}" level using these examples as a structural guide:
+    2.  **Cognitive Level Guide**: {cognitive_intro}
         - Remembering: "State the formula for...", "List the components of...", "Identify the correct term..."
         - Understanding: "Explain the difference between...", "Summarize the process of...", "Describe how X works..."
         - Applying: "Calculate the value of X given...", "Use the theorem to solve...", "Write a function that..."
@@ -267,11 +446,7 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
 
     {co_rule}
 
-    4.  **Output Schema (MANDATORY)**: Each object in the `questions` array MUST be a valid JSON object containing ONLY these 4 keys, all with string values:
-        - "question"
-        - "answer"
-        - "question_latex"
-        - "answer_latex"
+    4.  **Output Schema (MANDATORY)**: Each object in the `questions` array MUST be a valid JSON object {output_keys}
         Exactly {num_questions} objects must be returned. No missing keys and no extra keys.
 
     {mcq_rule}
@@ -548,6 +723,167 @@ async def _run_rules(tasks: list) -> list:
     return first + await asyncio.gather(*tasks[1:], return_exceptions=True)
 
 
+def unit_for_question(question, units, single_unit=""):
+    """
+    The unit a generated question is filed under: (unitId, unit title).
+
+    With several units the model labels each question, and the label is checked
+    against the units actually offered. A label naming a unit that was never
+    offered is dropped rather than trusted - filed under the wrong unit, a
+    question silently goes missing from the right one - and comes back as no
+    unit, for the teacher to choose.
+
+    With one unit there is nothing to choose, so every question belongs to it
+    whatever the model wrote. With none (a request from before "units" existed)
+    the question carries the request's own unit title and no id, as it always did.
+    """
+    offered = {
+        (u.get('unitId') or '').strip(): u.get('unit', '')
+        for u in (units or [])
+        if (u.get('unitId') or '').strip()
+    }
+
+    if not offered:
+        return "", single_unit or ""
+    if len(offered) == 1:
+        only_id = next(iter(offered))
+        return only_id, offered[only_id]
+
+    label = (question.get("unit_id") or "").strip().strip('"')
+    if label in offered:
+        return label, offered[label]
+    return "", ""
+
+
+def _offered(items):
+    """The entries of a courseOutcomes or cognitiveLevels list that carry an id, in order, each id once."""
+    seen, offered = set(), []
+    for item in items or []:
+        item_id = (item.get('id') or '').strip()
+        if item_id and item_id not in seen:
+            seen.add(item_id)
+            offered.append({**item, 'id': item_id})
+    return offered
+
+
+def _chosen(question, key, offered):
+    """
+    Which offered entry a question belongs to, by the same rules as units.
+
+    One entry: that one, whatever the model wrote. Several: the one the model's
+    label names - or None when the label names nothing that was offered, so the
+    question comes back unlabelled for the teacher to decide, rather than saved
+    against the wrong outcome or level.
+    """
+    if len(offered) == 1:
+        return offered[0]
+    label = (question.get(key) or "").strip().strip('"')
+    return next((entry for entry in offered if entry['id'] == label), None)
+
+
+# What may differ between rules that are still asked for in one call.
+_DIFFICULTY_KEYS = frozenset({'questionId', 'difficultyLevel', 'difficultyLevelId', 'numberOfQuestions'})
+
+
+def _merge_difficulty_rules(rules):
+    """
+    Rules that differ only in difficulty, merged into one rule - one AI call.
+
+    The portal sends one rule per difficulty level ticked: 6 Easy and 4 Hard
+    arrive as two rules, identical in everything else, and each used to be an
+    AI call of its own. Merged, one call writes the whole batch: the prompt
+    gives the number each level gets, and the model labels every question with
+    its level (see difficulty_for_question).
+
+    Rules that differ in anything else - type, marks, outcomes, cognitive
+    levels - are still asked for separately, and so is any rule without its own
+    difficultyLevelId, which is what a portal from before difficulty mixes sends.
+    """
+    groups = {}
+    for rule in rules:
+        key = json.dumps({k: v for k, v in rule.items() if k not in _DIFFICULTY_KEYS},
+                         sort_keys=True, default=str)
+        groups.setdefault(key, []).append(rule)
+
+    merged = []
+    for group in groups.values():
+        ids = [(r.get('difficultyLevelId') or '').strip() for r in group]
+        if len(group) == 1 or not all(ids) or len(set(ids)) != len(ids):
+            merged.extend(group)
+            continue
+        merged.append({
+            **group[0],
+            'numberOfQuestions': sum(r['numberOfQuestions'] for r in group),
+            'difficultyLevel': ', '.join(r['difficultyLevel'] for r in group),
+            'difficultyLevelId': '',
+            'difficulties': [
+                {'id': level_id, 'name': r['difficultyLevel'], 'count': r['numberOfQuestions']}
+                for level_id, r in zip(ids, group)
+            ],
+        })
+    return merged
+
+
+def difficulty_for_question(question, rule, position):
+    """
+    The difficulty a generated question is saved at: (id, name).
+
+    A rule for one level gives that level to every question, as it always did.
+    For a merged rule the question's "difficulty_id" decides, when it names a
+    level that was asked for. When it does not, the question's place in the
+    list does - the model is told to list the levels in order, so in 6 Easy and
+    4 Hard the first six are the Easy ones. A question past the count asked for
+    comes back with no level, for the teacher to choose.
+    """
+    levels = rule.get('difficulties') or []
+    if len(levels) < 2:
+        return rule.get('difficultyLevelId', ''), rule['difficultyLevel']
+
+    label = (question.get('difficulty_id') or '').strip().strip('"')
+    for level in levels:
+        if level['id'] == label:
+            return level['id'], level['name']
+
+    end = 0
+    for level in levels:
+        end += level['count']
+        if position < end:
+            return level['id'], level['name']
+    return '', ''
+
+
+def outcome_for_question(question, rule):
+    """
+    The course outcome a generated question is saved against: (id, code, description).
+
+    With no courseOutcomes in the rule (a request from before they existed) the
+    question carries the rule's own courseOutcome text and no id, as it always did.
+    """
+    offered = _offered(rule.get('courseOutcomes'))
+    if not offered:
+        return "", "", rule.get('courseOutcome', '')
+    chosen = _chosen(question, 'co_id', offered)
+    if chosen is None:
+        return "", "", ""
+    return chosen['id'], chosen.get('code', ''), chosen.get('description', '')
+
+
+def level_for_question(question, rule):
+    """
+    The cognitive level a generated question is saved at: (id, name).
+
+    With no cognitiveLevels in the rule the question carries the rule's own
+    cognitiveLevel name and no id, as it always did.
+    """
+    offered = _offered(rule.get('cognitiveLevels'))
+    if not offered:
+        return "", rule.get('cognitiveLevel', '')
+    chosen = _chosen(question, 'cognitive_level_id', offered)
+    if chosen is None:
+        return "", ""
+    return chosen['id'], chosen.get('name', '')
+
+
 async def generate_questions_from_prompt_async(data):
     """
     Handles logic of calling the selected LLM provider concurrently for all rules.
@@ -607,13 +943,21 @@ async def generate_questions_from_prompt_async(data):
         # every generate request into a 500 - the exact opposite of failing open.
         error_logger.exception("RAG: unavailable, generating from titles only")
 
+    # One call for the whole batch when the rules differ only in difficulty -
+    # which is every batch the portal sends. See _merge_difficulty_rules.
+    rules = _merge_difficulty_rules(data['Rules'])
+    if len(rules) < len(data['Rules']):
+        current_app.logger.info(
+            f"Merged {len(data['Rules'])} rules differing only in difficulty into {len(rules)}."
+        )
+
     tasks = [
         _generate_single_rule(
             provider_instance,
-            generate_prompt(data['module'], data.get('unit', ''), rule, rule.get("numberOfQuestions", 1), data['BookDetails'], data['content'], source_extracts),
+            generate_prompt(data['module'], data.get('unit', ''), rule, rule.get("numberOfQuestions", 1), data['BookDetails'], data['content'], source_extracts, data.get('units'), data.get('course')),
             provider_name
         )
-        for rule in data['Rules']
+        for rule in rules
     ]
 
     current_app.logger.info(f"Dispatching {len(tasks)} tasks to '{provider_name}'.")
@@ -641,7 +985,7 @@ async def generate_questions_from_prompt_async(data):
     failures = []
 
     for i, result in enumerate(results_from_api):
-        rule = data['Rules'][i]
+        rule = rules[i]
         if isinstance(result, Exception):
             error_logger.error(
                 f"Error processing rule {rule['questionId']} with {provider_name}: {result}"
@@ -649,8 +993,16 @@ async def generate_questions_from_prompt_async(data):
             failures.append(result)
             continue
 
-        for q in result:
+        for position, q in enumerate(result):
+            unit_id, unit_title = unit_for_question(q, data.get('units'), data.get('unit', ''))
+            difficulty_id, difficulty_name = difficulty_for_question(q, rule, position)
+            co_id, co_code, co_description = outcome_for_question(q, rule)
+            level_id, level_name = level_for_question(q, rule)
             final_question = {
+                # Empty when the batch covered several units and the model named
+                # none of them - the portal then asks the teacher to choose.
+                "unitId": unit_id,
+                "unit": unit_title,
                 "question": q.get("question", "").strip('"'),
                 # Normalised here so every consumer receives usable LaTeX,
                 # rather than each client having to repair it - see
@@ -658,11 +1010,19 @@ async def generate_questions_from_prompt_async(data):
                 "questionLatex": _unescape_llm_latex(q.get("question_latex", "")).strip('"'),
                 "answer": q.get("answer", "").strip('"'),
                 "answerLatex": _unescape_llm_latex(q.get("answer_latex", "")).strip('"'),
-                "cognitiveLevel": rule["cognitiveLevel"],
-                "difficultyLevel": rule["difficultyLevel"],
+                # The level, difficulty and outcome THIS question was written
+                # for, each with the portal's id so the portal can save it that
+                # way. An id is empty when the rule offered several and the model
+                # named none of them - the portal then asks the teacher to choose.
+                "cognitiveLevelId": level_id,
+                "cognitiveLevel": level_name,
+                "difficultyLevelId": difficulty_id,
+                "difficultyLevel": difficulty_name,
                 "mark": rule["mark"],
                 "questionType": rule["questionType"],
-                "courseOutcome": rule.get("courseOutcome", "") # <-- ADDED
+                "paperOutcomeId": co_id,
+                "courseOutcomeCode": co_code,
+                "courseOutcome": co_description,
             }
             all_generated_questions.append(final_question)
 

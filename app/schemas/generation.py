@@ -11,6 +11,20 @@ class BookDetailsSchema(Schema):
     # cannot be retrieved from, and generation falls back to the title alone.
     FilePath = fields.Str(required=False, load_default="")
 
+class CourseOutcomeSchema(Schema):
+    """One course outcome a rule's questions may test."""
+    # The portal's PaperOutcomeID, as text. Copied back onto every question so
+    # the portal can save each one against the outcome it was written for.
+    id = fields.Str(required=True)
+    code = fields.Str(required=False, load_default="")
+    description = fields.Str(required=False, load_default="")
+
+class CognitiveLevelSchema(Schema):
+    """One cognitive level a rule's questions may be written at."""
+    # The portal's CognitiveLevelID, as text - copied back the same way.
+    id = fields.Str(required=True)
+    name = fields.Str(required=True)
+
 class RuleSchema(Schema):
     questionId = fields.Int(required=True)
     questionType = fields.Str(required=True)
@@ -19,11 +33,45 @@ class RuleSchema(Schema):
     mark = fields.Int(required=True)
     numberOfQuestions = fields.Int(required=True, validate=lambda n: n > 0)
     courseOutcome = fields.Str(required=True)
+    # The portal's QuestionDiffLevelID for difficultyLevel, echoed back on each
+    # question. A batch asking for a mix of difficulties sends one rule per level.
+    difficultyLevelId = fields.Str(required=False, load_default="")
+    # Several outcomes or cognitive levels for one rule. Optional: without them
+    # the rule is described by courseOutcome and cognitiveLevel alone, exactly as
+    # before - which is also what a portal older than these fields sends.
+    courseOutcomes = fields.List(fields.Nested(CourseOutcomeSchema), required=False, load_default=list)
+    cognitiveLevels = fields.List(fields.Nested(CognitiveLevelSchema), required=False, load_default=list)
+
+class UnitSchema(Schema):
+    """One unit a batch may draw questions from."""
+    # The portal's PaperSyllabusUnitID, as text. Copied back onto every question
+    # so the portal can file each one under the unit it was written for.
+    unitId = fields.Str(required=True)
+    unit = fields.Str(required=False, load_default="")
+    content = fields.Str(required=False, load_default="")
+
+class CourseSchema(Schema):
+    """The course a paper belongs to, which sets the level of its questions."""
+    # Programme category as the portal names it - UG, PG and the like.
+    category = fields.Str(required=False, load_default="")
+    programme = fields.Str(required=False, load_default="")
+    subject = fields.Str(required=False, load_default="")
+    semester = fields.Str(required=False, load_default="")
+    # The paper (course) name, e.g. "Differential Calculus - MAT1CJ101".
+    paper = fields.Str(required=False, load_default="")
 
 class GenerateSchema(Schema):
     module = fields.Str(required=True)
     unit = fields.Str(required=False, load_default="")
     content = fields.Str(required=True)
+    # Several units in one batch. Optional: a request without it is a single-unit
+    # request exactly as before, described by "unit" and "content" alone - which
+    # is also what a portal older than this field still sends.
+    units = fields.List(fields.Nested(UnitSchema), required=False, load_default=list)
+    # The course the paper belongs to - category (UG/PG), subject, semester,
+    # paper. Optional: without it the questions are pitched at university level
+    # in general.
+    course = fields.Nested(CourseSchema, required=False, load_default=None, allow_none=True)
     Rules = fields.List(fields.Nested(RuleSchema), required=True)
     BookDetails = fields.List(fields.Nested(BookDetailsSchema), required=True)
     model = fields.Str(
@@ -117,6 +165,14 @@ class _LLMQuestionSchema(Schema):
     answer = fields.Str(required=True)
     question_latex = fields.Str(required=True)
     answer_latex = fields.Str(required=True)
+    # Which unit the question tests, when a batch covers several. Optional so a
+    # single-unit answer - which has no reason to name one - still validates.
+    unit_id = fields.Str(required=False, load_default="")
+    # Likewise the outcome, the cognitive level and the difficulty, when a rule
+    # offers several.
+    co_id = fields.Str(required=False, load_default="")
+    cognitive_level_id = fields.Str(required=False, load_default="")
+    difficulty_id = fields.Str(required=False, load_default="")
 
 class LLMToolOutputSchema(Schema):
     """

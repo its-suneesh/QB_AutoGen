@@ -18,7 +18,11 @@ gemini_tool = {
                         "question": {"type": "STRING"},
                         "answer": {"type": "STRING"},
                         "question_latex": {"type": "STRING"},
-                        "answer_latex": {"type": "STRING"}
+                        "answer_latex": {"type": "STRING"},
+                        "unit_id": {"type": "STRING"},
+                        "co_id": {"type": "STRING"},
+                        "cognitive_level_id": {"type": "STRING"},
+                        "difficulty_id": {"type": "STRING"}
                     },
                     "required": ["question", "answer", "question_latex", "answer_latex"]
                 }
@@ -58,7 +62,11 @@ OPENAI_COMPATIBLE_TOOL = {
                             "question": {"type": "string"},
                             "answer": {"type": "string"},
                             "question_latex": {"type": "string"},
-                            "answer_latex": {"type": "string"}
+                            "answer_latex": {"type": "string"},
+                        "unit_id": {"type": "string"},
+                        "co_id": {"type": "string"},
+                        "cognitive_level_id": {"type": "string"},
+                        "difficulty_id": {"type": "string"}
                         },
                         "required": ["question", "answer", "question_latex", "answer_latex"]
                     }
@@ -91,7 +99,11 @@ CLAUDE_TOOL = {
                         "question": {"type": "string"},
                         "answer": {"type": "string"},
                         "question_latex": {"type": "string"},
-                        "answer_latex": {"type": "string"}
+                        "answer_latex": {"type": "string"},
+                        "unit_id": {"type": "string"},
+                        "co_id": {"type": "string"},
+                        "cognitive_level_id": {"type": "string"},
+                        "difficulty_id": {"type": "string"}
                     },
                     "required": ["question", "answer", "question_latex", "answer_latex"]
                 }

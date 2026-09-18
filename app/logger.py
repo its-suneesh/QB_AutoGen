@@ -68,3 +68,7 @@ def setup_logging(app: Flask):
         logger.addHandler(file_handler)
 
     app.logger.info("Simple logging configured to output to stdout and files.")
+    
+    
+    
+    
