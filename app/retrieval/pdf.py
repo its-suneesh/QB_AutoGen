@@ -87,9 +87,61 @@ class PdfEncrypted(PdfUnreadable):
 
 
 
+PAGE_MARKER = re.compile(r"^=+\s*page\s+(\d+)[^\n]*$", re.IGNORECASE | re.MULTILINE)
+
+
+def looks_like_text(data: bytes) -> bool:
+    """
+    Is this upload already the words, rather than a document to read them from?
+
+    A PDF always starts "%PDF"; anything that decodes as UTF-8 and does not is
+    treated as text. That is what the portal sends for a scanned book it has
+    had OCR'd: the pictures are of no use to anyone here, and the text is the
+    same book at a fortieth of the size.
+    """
+    if data[:4] == b"%PDF":
+        return False
+    # An incremental decoder, because a fixed slice of Malayalam lands in the
+    # middle of a three-byte character about two times in three - and a plain
+    # decode of that tail raises, which would send real text down the PDF path.
+    import codecs
+
+    try:
+        codecs.getincrementaldecoder("utf-8")().decode(data[:4096], False)
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def extract_text_pages(data: bytes) -> list[str]:
+    """
+    Pages out of a recovered-text file.
+
+    Split on the "===== page 137 (ocr, 981 chars) =====" markers the reader
+    writes. They are what keeps a citation honest: without them the pages would
+    be arbitrary slices and a question said to come from page 137 would be
+    pointing at nothing. A file with no markers is one page.
+    """
+    text = data.decode("utf-8", "replace")
+    marks = list(PAGE_MARKER.finditer(text))
+    if not marks:
+        return [clean_page(text)]
+
+    pages: list[str] = []
+    for i, mark in enumerate(marks):
+        start = mark.end()
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        pages.append(clean_page(text[start:end]))
+    return pages
+
+
 def extract_pages(pdf_bytes: bytes) -> list[str]:
     """Per-page text, layout-aware so two-column books do not interleave."""
     import fitz  # PyMuPDF
+
+    # Already words: nothing to open, nothing to render.
+    if looks_like_text(pdf_bytes):
+        return extract_text_pages(pdf_bytes)
 
     try:
         pages: list[str] = []
@@ -119,12 +171,19 @@ def extract_pages(pdf_bytes: bytes) -> list[str]:
 
 
 
-def assess(pages: Sequence[str]) -> tuple[str, float]:
+def assess(pages: Sequence[str], from_text: bool = False) -> tuple[str, float]:
     """Returns (status, quality). Mirrors the portal's upload-time check."""
     if not pages:
         return "failed", 0.0
 
     joined = " ".join(pages)
+    # A recovered-text upload has already been through OCR: "needs_ocr" would
+    # ask for the one thing that has been done, and the alphabet ratio measures
+    # a PDF's broken fonts, which a text file cannot have. Only emptiness is
+    # still worth reporting.
+    if from_text:
+        return ("indexed", 1.0) if len(joined.strip()) else ("failed", 0.0)
+
     chars_per_page = len(joined) / len(pages)
     non_space = len(re.sub(r"\s", "", joined)) or 1
     letters = len(re.findall(r"[A-Za-zÀ-￿]", joined))

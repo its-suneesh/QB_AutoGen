@@ -14,7 +14,7 @@ from app.config import Config
 
 from . import embeddings
 from .embeddings import EMBED_DIM
-from .pdf import assess, chunk_pages, extract_pages
+from .pdf import assess, chunk_pages, extract_pages, looks_like_text
 
 logger = logging.getLogger(__name__)
 
@@ -312,9 +312,9 @@ def _store(doc_id, paper_id, slot_no, book_name, book_type,
 
 
 def _prepare(pdf_bytes: bytes, model: str | None = None):
-    """Everything derived from the PDF, before anything is written."""
+    """Everything derived from the upload, before anything is written."""
     pages = extract_pages(pdf_bytes)
-    status, quality = assess(pages)
+    status, quality = assess(pages, from_text=looks_like_text(pdf_bytes))
 
     chunks, vectors = [], []
     if status == "indexed":
