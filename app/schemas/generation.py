@@ -1,9 +1,30 @@
 import json
 import re
 
-from marshmallow import Schema, fields, pre_load, validate
+from marshmallow import EXCLUDE, Schema, fields, pre_load, validate
 
-class BookDetailsSchema(Schema):
+
+class PortalSchema(Schema):
+    """
+    A schema for what the portal sends, which ignores what it does not know.
+
+    Marshmallow refuses an unrecognised field by default, and that turned a
+    field the portal added for its OWN screens into a 400 for every paper with
+    a book:
+
+        "BookDetails": {"0": {"TextFilePath": ["Unknown field."]}}
+
+    Nothing here reads a field it has not declared, so refusing one buys no
+    safety - it only makes this service break whenever the portal grows a
+    column. Ignoring it keeps the two able to move separately, which is the
+    point of them being separate.
+    """
+
+    class Meta:
+        unknown = EXCLUDE
+
+
+class BookDetailsSchema(PortalSchema):
     BookName = fields.Str(required=True)
     BookType = fields.Str(required=True)
     # Stored file name of the uploaded PDF, e.g. "1_734.pdf". Optional so a
@@ -11,7 +32,7 @@ class BookDetailsSchema(Schema):
     # cannot be retrieved from, and generation falls back to the title alone.
     FilePath = fields.Str(required=False, load_default="")
 
-class CourseOutcomeSchema(Schema):
+class CourseOutcomeSchema(PortalSchema):
     """One course outcome a rule's questions may test."""
     # The portal's PaperOutcomeID, as text. Copied back onto every question so
     # the portal can save each one against the outcome it was written for.
@@ -19,13 +40,13 @@ class CourseOutcomeSchema(Schema):
     code = fields.Str(required=False, load_default="")
     description = fields.Str(required=False, load_default="")
 
-class CognitiveLevelSchema(Schema):
+class CognitiveLevelSchema(PortalSchema):
     """One cognitive level a rule's questions may be written at."""
     # The portal's CognitiveLevelID, as text - copied back the same way.
     id = fields.Str(required=True)
     name = fields.Str(required=True)
 
-class RuleSchema(Schema):
+class RuleSchema(PortalSchema):
     questionId = fields.Int(required=True)
     questionType = fields.Str(required=True)
     difficultyLevel = fields.Str(required=True)
@@ -42,7 +63,7 @@ class RuleSchema(Schema):
     courseOutcomes = fields.List(fields.Nested(CourseOutcomeSchema), required=False, load_default=list)
     cognitiveLevels = fields.List(fields.Nested(CognitiveLevelSchema), required=False, load_default=list)
 
-class UnitSchema(Schema):
+class UnitSchema(PortalSchema):
     """One unit a batch may draw questions from."""
     # The portal's PaperSyllabusUnitID, as text. Copied back onto every question
     # so the portal can file each one under the unit it was written for.
@@ -50,7 +71,7 @@ class UnitSchema(Schema):
     unit = fields.Str(required=False, load_default="")
     content = fields.Str(required=False, load_default="")
 
-class CourseSchema(Schema):
+class CourseSchema(PortalSchema):
     """The course a paper belongs to, which sets the level of its questions."""
     # Programme category as the portal names it - UG, PG and the like.
     category = fields.Str(required=False, load_default="")
@@ -60,7 +81,7 @@ class CourseSchema(Schema):
     # The paper (course) name, e.g. "Differential Calculus - MAT1CJ101".
     paper = fields.Str(required=False, load_default="")
 
-class GenerateSchema(Schema):
+class GenerateSchema(PortalSchema):
     module = fields.Str(required=True)
     unit = fields.Str(required=False, load_default="")
     content = fields.Str(required=True)
