@@ -36,6 +36,22 @@ class Config:
     # firewall rule, a private network, or a reverse proxy that accepts only the
     # backend.
 
+    # The key a caller must present to use this service.
+    #
+    # Set API_KEY and every endpoint but the probes requires the same value in
+    # the X-API-Key header. Leave it unset and the service stays open, which is
+    # what makes the rollout safe: deploy the portal with the key first, then
+    # set this and restart - no window where Generate fails.
+    #
+    # This is NOT the two arrangements described above. The key is held by the
+    # .NET backend, which is the only caller: it never reaches the browser, so
+    # it cannot ship in the JavaScript bundle. And it is this service's own
+    # secret, not the portal's JWT, so nothing has to be kept in step and no
+    # drift can sign a teacher out. What it adds over "the deployment's job" is
+    # a second lock: whoever reaches the address still cannot spend the LLM
+    # quota without the key.
+    API_KEY = os.getenv("API_KEY", "").strip()
+
     # API Keys
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")

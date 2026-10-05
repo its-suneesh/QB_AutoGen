@@ -311,19 +311,42 @@ entry carrying its number and where it belongs. Follow these rules exactly:
     contradicts the question is filed silently and never noticed.
 
 {_options("ModuleLabel", vocabulary.get("modules", []))}{_options("UnitLabel", vocabulary.get("units", []))}{_options("QuestionTypeName", vocabulary.get("question_types", []))}{_options("DifficultyLevelName", vocabulary.get("difficulty_levels", []))}{_options("CognitiveLevelName", vocabulary.get("cognitive_levels", []))}{_options("COCode", vocabulary.get("course_outcomes", []))}
-3.  Marks. Give the marks the question is plainly worth from its scope - a
-    one-line definition is small, a "discuss with examples" is large. Use null
-    if the wording does not suggest one.
+3.  Marks. A question that arrives with "[N marks]" after it carries the
+    TEACHER'S OWN mark: return exactly that number, and pick the question type
+    whose weightage matches it. Never argue with it - they know what the paper
+    pays, and a number changed here is filed silently and never noticed.
+    For a question given without one, give the marks it is plainly worth from
+    its scope - a one-line definition is small, a "discuss with examples" is
+    large - or null if the wording does not suggest one.
 
 4.  Return an entry for EVERY number above, even where every field is empty.
 
 Answer by calling submit_classifications once."""
 
 
+def _mark_value(mark):
+    """A mark as a number the portal can store, or None."""
+    if not isinstance(mark, (int, float)) or isinstance(mark, bool):
+        return None
+    return int(mark) if float(mark).is_integer() else round(float(mark), 2)
+
+
 def build_questions_message(numbered) -> str:
-    """The only part that differs between one batch and the next."""
-    body = "\n\n".join(f"{i}. {text}" for i, text in numbered)
-    return f"{body}\n\n--- END OF QUESTIONS ---"
+    """
+    The only part that differs between one batch and the next.
+
+    A question the teacher marked carries "[N marks]" after its text, which is
+    what rule 3 tells the model to keep rather than work out for itself.
+    """
+    lines = []
+    for item in numbered:
+        index, text = item[0], item[1]
+        mark = item[2] if len(item) > 2 else None
+        suffix = "  [" + str(mark) + " marks]" if mark is not None else ""
+        lines.append(str(index) + ". " + text + suffix)
+    body = chr(10).join(line + chr(10) for line in lines)
+    return body + chr(10) + "--- END OF QUESTIONS ---"
+
 
 
 async def _classify_batch(model, numbered, vocabulary):
@@ -337,7 +360,7 @@ async def _classify_batch(model, numbered, vocabulary):
 
 
 async def classify_questions(questions: list[str], vocabulary: dict,
-                             model: str = "claude") -> dict:
+                             model: str = "claude", marks: list | None = None) -> dict:
     """
     Files a list of questions the teacher already has against their syllabus.
 
@@ -348,7 +371,21 @@ async def classify_questions(questions: list[str], vocabulary: dict,
     own file and the model is only asked for labels, so there is nothing here
     to verify or to get wrong about the wording.
     """
-    cleaned = [(i, q.strip()) for i, q in enumerate(questions or [], start=1)
+    # marks[i] is what the teacher wrote beside question i, where they wrote
+    # one. It is carried through the numbering so a batch that comes back out
+    # of order still returns each question's own mark.
+    given = list(marks or [])
+
+    def given_mark(position):
+        value = given[position] if position < len(given) else None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if number > 0 else None
+
+    cleaned = [(i, q.strip(), given_mark(i - 1))
+               for i, q in enumerate(questions or [], start=1)
                if q and q.strip()]
 
     if not cleaned:
@@ -386,13 +423,19 @@ async def classify_questions(questions: list[str], vocabulary: dict,
                 by_index[int(index)] = item
 
     rows = []
-    for index, text in cleaned:
+    for index, text, teacher_mark in cleaned:
         found = by_index.get(index, {})
-        mark = found.get("Mark")
+        # The teacher's own mark wins. The model is told to return it
+        # unchanged; this makes that true even when it does not.
+        mark = teacher_mark if teacher_mark is not None else found.get("Mark")
         rows.append({
             "Question": text,
             "AnswerKey": "",
-            "Mark": int(mark) if isinstance(mark, (int, float)) else None,
+            # Whole marks go back as whole numbers, as they always have. A
+            # half mark stays a half mark: the portal stores Mark as a
+            # decimal, and rounding the teacher's 2.5 to 2 here would be the
+            # silent change rule 3 forbids.
+            "Mark": _mark_value(mark),
             "ModuleLabel": (found.get("ModuleLabel") or "").strip(),
             "UnitLabel": (found.get("UnitLabel") or "").strip(),
             "QuestionTypeName": (found.get("QuestionTypeName") or "").strip(),

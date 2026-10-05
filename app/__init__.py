@@ -1,5 +1,6 @@
 import os
-from flask import Flask, jsonify
+import secrets
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from dotenv import load_dotenv
 from marshmallow import ValidationError
@@ -39,6 +40,32 @@ def create_app():
     except Exception as e:
         app.logger.critical(f"Error configuring Gemini API: {e}", exc_info=True)
         exit(f"Could not configure Gemini API: {e}")
+
+    # Who may use this service.
+    #
+    # One check for every route, rather than a decorator per endpoint that a
+    # new endpoint can forget to carry. The probes stay open: /health is what
+    # Docker restarts on and /ready is what a monitor reads, and neither should
+    # need a secret to answer.
+    OPEN_PATHS = {"/health", "/ready"}
+
+    @app.before_request
+    def require_api_key():
+        if not app.config.get("API_KEY"):
+            return None
+        if request.method == "OPTIONS" or request.path in OPEN_PATHS:
+            return None
+
+        presented = request.headers.get("X-API-Key", "")
+        # compare_digest, not ==: a plain comparison returns as soon as two
+        # characters differ, and the time it takes tells a guesser how much of
+        # the key they have right.
+        if not presented or not secrets.compare_digest(presented, app.config["API_KEY"]):
+            logging.getLogger("access").warning(
+                "Rejected %s %s - no valid X-API-Key", request.method, request.path)
+            return jsonify({"error": "Unauthorized", "message": "Invalid or missing API key"}), 401
+
+        return None
 
     register_routes(app)
 

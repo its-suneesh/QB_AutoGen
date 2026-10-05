@@ -73,6 +73,10 @@ class UnitSchema(PortalSchema):
 
 class CourseSchema(PortalSchema):
     """The course a paper belongs to, which sets the level of its questions."""
+    # The university whose syllabus the course follows. Named because a
+    # question paper is a house style: the wording, the way choices are offered
+    # and how much a mark buys differ from one university to the next.
+    university = fields.Str(required=False, load_default="")
     # Programme category as the portal names it - UG, PG and the like.
     category = fields.Str(required=False, load_default="")
     programme = fields.Str(required=False, load_default="")

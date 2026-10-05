@@ -330,13 +330,15 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
             'for this type - prose, a list or a table - not necessarily a paragraph.'
         )
 
-    # Who the questions are for. With the course known - its programme category
-    # (UG or PG), subject, semester and paper - the level comes from it: an
+    # Who the questions are for. With the course known - its university,
+    # programme category (UG or PG), subject, semester and paper - the level
+    # comes from it: an
     # undergraduate course is pitched below a postgraduate one, and an early
     # semester below a final one. Without it the questions are pitched at
     # university level in general, exactly as before.
     course = course or {}
     labelled = [
+        ('university', course.get('university')),
         ('programme category', course.get('category')),
         ('programme', course.get('programme')),
         ('subject', course.get('subject')),
@@ -354,14 +356,14 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
             "pitched below a postgraduate (PG) course - a master's programme such as M.A., M.Sc., M.Com., MBA, MCA "
             'or M.Tech.: a PG question expects more depth, rigour and independent application than a UG question '
             'on the same topic. An early semester expects less than a final one.\n'
-            '    - Even a "Very Easy" question tests university-level content of the listed topics, never '
+            '    - Even an "Easy" question tests university-level content of the listed topics, never '
             'school-level content.'
         )
     else:
         audience_lines = (
             '- The questions are for a university examination in India: students of an undergraduate or '
             'postgraduate course, answering in writing, without books, within a fixed time.\n'
-            '    - Pitch every question at the level of that course. Even a "Very Easy" question tests '
+            '    - Pitch every question at the level of that course. Even an "Easy" question tests '
             'university-level content of the listed topics, never school-level content.'
         )
 
@@ -385,7 +387,7 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
     - Every question must mainly TEST one of the syllabus topics above, as taught in this module and unit. Those topics are the whole of what may be asked.
     - A question that only mentions the topic while testing something else is OUT of scope. For example, for "Rules for finding limits" every question must require finding or reasoning about a limit by those rules; a question on derivatives, tangents, continuity or integration is out of scope, even when the book covers it on the same page.
     - Do not take questions from neighbouring material: the previous or next section, another unit or module, or a more advanced topic of the same subject. A prerequisite may be used as a step inside a question about the listed topic, but it must never be what the question tests.
-    - Difficulty never widens the scope. A "Hard" or "Very Hard" question goes DEEPER into the listed topic - more steps, combined rules, tricky or special cases, less obvious reasoning - and never becomes hard by bringing in a later topic.
+    - Difficulty never widens the scope. A "Hard" question goes DEEPER into the listed topic - more steps, combined rules, tricky or special cases, less obvious reasoning - and never becomes hard by bringing in a later topic.
     - When many questions are asked for, vary the sub-topic, method, context and form WITHIN the listed topics rather than drifting to other ones. When several topics are listed, spread the questions across them.
     - The course outcome, the question type, the book references and the source extracts do NOT widen the scope. Where any of them points outside the listed topics, the listed topics win.
     - Before submitting, check every question: "Is this question mainly testing a listed syllabus topic?" Replace any that is not.
@@ -414,14 +416,12 @@ def generate_prompt(module, unit, rule, num_questions, book_details, content, so
     - A question in another language (rule 10) follows that language's own conventions instead.
 
     DIFFICULTY (MANDATORY - {difficulty_header}):
-    - The level is named in the institution's own words, so read it for meaning and use the nearest of the five levels below - for example "Simple" is Easy, "Moderate" or "Average" is Medium, "Difficult" or "Tough" is Hard.
+    - The level is named in the institution's own words, so read it for meaning and use the nearest of the three levels below - for example "Simple" is Easy, "Moderate" or "Average" is Medium, "Difficult" or "Tough" is Hard. A level above or below the three - a fourth or fifth rung some institutions keep - is treated as the nearest of these three.
     - Each level is judged for a student of this course writing a university examination:
-        - Very Easy: any student who attended the classes answers it at once. One step - state a definition, law or formula as the textbook gives it, or put values straight into one formula. No twist.
-        - Easy: any student who studied the topic answers it. One or two steps using one idea, close to a worked example or exercise in the textbook but with different values or wording.
+        - Easy: any student who studied the topic answers it. One or two steps using one idea, close to a worked example or exercise in the textbook but with different values or wording. A definition, law or formula stated as the textbook gives it, or values put straight into one formula, is Easy.
         - Medium: a typical university examination question, answered by a student who prepared well. Several steps; the student must choose the right method and apply it to a case that is not the same as a textbook example.
-        - Hard: only a well-prepared student answers it fully. Many steps, two or more ideas from the listed topics combined, careful reasoning, or a special case or condition that is easy to miss.
-        - Very Hard: the most demanding question in the paper; only the best students answer it fully. Non-routine - it needs insight, a derivation or proof, or several results linked together, and it does not follow any worked example. It must still be fair: answerable from the listed topics within the time its marks allow.
-    - Difficulty, cognitive level and marks are separate. The cognitive level decides the KIND of thinking, the marks decide how LONG the answer is, and the difficulty decides how DEMANDING the question is. A 2-mark question can be Very Hard (short, but needs insight); a 10-mark question can be Very Easy (long, but straightforward). For a recall level such as Remembering, a harder level means recalling something less obvious or more precisely - all the conditions of a theorem, a complete classification - not a different kind of thinking.
+        - Hard: only a well-prepared student answers it fully. Many steps, two or more ideas from the listed topics combined, careful reasoning, or a special case or condition that is easy to miss. This is the top of the scale, so the most demanding question in the paper is Hard - it may need insight, a derivation or a proof - and it must still be fair: answerable from the listed topics within the time its marks allow.
+    - Difficulty, cognitive level and marks are separate. The cognitive level decides the KIND of thinking, the marks decide how LONG the answer is, and the difficulty decides how DEMANDING the question is. A 2-mark question can be Hard (short, but needs insight); a 10-mark question can be Easy (long, but straightforward). For a recall level such as Remembering, a harder level means recalling something less obvious or more precisely - all the conditions of a theorem, a complete classification - not a different kind of thinking.
     - Make a question harder only through the subject - never through unclear wording, missing or confusing data, long tedious arithmetic, or content outside SCOPE.
     {difficulty_rule}
 

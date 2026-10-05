@@ -27,6 +27,7 @@ async def classify_questions_endpoint():
 
     JSON:
         questions   - the question texts, in the order they were written
+        marks       - optional, the teacher's own mark per question by position
         vocabulary  - the lists the classification must choose from:
                       modules, units, question_types, difficulty_levels,
                       cognitive_levels, course_outcomes
@@ -50,6 +51,14 @@ async def classify_questions_endpoint():
                        f"This file has {len(questions)}. Split it and try again.",
         }), 413
 
+    # What the teacher wrote in the Mark column, aligned with questions by
+    # position. Optional: a file without that column sends nothing and the
+    # marks are worked out from the wording, as before.
+    marks = body.get('marks')
+    if marks is not None and not isinstance(marks, list):
+        return jsonify({"error": "Bad Request",
+                        "message": "marks must be a list, aligned with questions."}), 400
+
     vocabulary = body.get('vocabulary') or {}
     if not isinstance(vocabulary, dict):
         return jsonify({"error": "Bad Request",
@@ -65,7 +74,7 @@ async def classify_questions_endpoint():
 
     try:
         with usage.collect() as spent:
-            result = await classify_questions(questions, vocabulary, model)
+            result = await classify_questions(questions, vocabulary, model, marks)
         result["usage"] = spent.as_dict()
     except Exception as exc:
         app_logger.exception("Question classification failed")
